@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"go.etcd.io/bbolt"
@@ -42,7 +43,7 @@ func New(db *bbolt.DB) (*Service, error) {
 	return s, nil
 }
 
-func (s *Service) CreateOutboundMessage(_ context.Context, params CreateOutboundMessageParams) (Message, error) {
+func (s *Service) CreateMessage(_ context.Context, params CreateOutboundMessageParams) (Message, error) {
 	var msg Message
 	err := s.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(outboundMessagesBucket)
@@ -76,6 +77,50 @@ func (s *Service) CreateOutboundMessage(_ context.Context, params CreateOutbound
 	}
 
 	return msg, nil
+}
+
+func (s *Service) LoadUpcomingMessages(_ context.Context) ([]Message, error) {
+	var messages []Message
+
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(outboundMessagesBucket)
+		if bucket == nil {
+			return errors.New("outbound messages bucket does not exist")
+		}
+
+		return bucket.ForEach(func(_, value []byte) error {
+			var msg Message
+			if err := json.Unmarshal(value, &msg); err != nil {
+				return fmt.Errorf("failed decode outbound message: %w", err)
+			}
+
+			if msg.ScheduledAt.UTC().After(time.Now().UTC()) {
+				messages = append(messages, msg)
+			}
+
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed list outbound messages: %w", err)
+	}
+
+	slices.SortFunc(messages, func(a, b Message) int {
+		if cmp := a.ScheduledAt.Compare(b.ScheduledAt); cmp != 0 {
+			return cmp
+		}
+
+		switch {
+		case a.ID < b.ID:
+			return -1
+		case a.ID > b.ID:
+			return 1
+		default:
+			return 0
+		}
+	})
+
+	return messages, nil
 }
 
 func outboundMessageKey(id uint64) []byte {

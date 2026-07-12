@@ -17,12 +17,13 @@ func (helpCommand) Name() string {
 
 func (helpCommand) isCommand() {}
 
-type listCommand struct{}
+type upcomingCommand struct{}
 
-func (listCommand) Name() string {
-	return "list"
+func (upcomingCommand) Name() string {
+	return "upcoming"
 }
-func (listCommand) isCommand() {}
+
+func (upcomingCommand) isCommand() {}
 
 type cancelCommand struct {
 	id uint64

@@ -16,6 +16,7 @@ type Poller struct {
 	signalClient *signaladapter.SignalAdapter
 	parser       *parser
 	outboundSvc  *outbound.Service
+	location     *time.Location
 	account      string
 }
 
@@ -25,6 +26,7 @@ func New(account string, location *time.Location, signalClient *signaladapter.Si
 		signalClient: signalClient,
 		parser:       newParser(location),
 		outboundSvc:  outboundSvc,
+		location:     location,
 	}
 }
 
@@ -75,8 +77,8 @@ func (p *Poller) handleCmd(ctx context.Context, cmd parsedCommand) error {
 	switch c := cmd.(type) {
 	case helpCommand:
 		return p.handleHelpCmd(ctx)
-	case listCommand:
-		return p.handleListCmd(ctx)
+	case upcomingCommand:
+		return p.handleUpcomingCmd(ctx)
 	case cancelCommand:
 		return p.handleCancelCmd(ctx, c)
 	case scheduleCommand:
@@ -86,8 +88,26 @@ func (p *Poller) handleCmd(ctx context.Context, cmd parsedCommand) error {
 	}
 }
 
-func (p *Poller) handleListCmd(ctx context.Context) error {
-	return p.queueSelfOutboundMessage(ctx, "Command /list is not implemented yet.")
+func (p *Poller) handleUpcomingCmd(ctx context.Context) error {
+	messages, err := p.outboundSvc.LoadUpcomingMessages(ctx)
+	if err != nil {
+		return fmt.Errorf("failed list outbound messages: %w", err)
+	}
+
+	lines := make([]string, 0, len(messages)+1)
+	lines = append(lines, fmt.Sprintf("Upcoming messages: %d", len(messages)))
+	for _, msg := range messages {
+		lines = append(lines, fmt.Sprintf(
+			"%d | %s (%s) | %s | %s",
+			msg.ID,
+			msg.ScheduledAt.In(p.location).Format("2006-01-02 15:04"),
+			p.location.String(),
+			msg.Recipient,
+			msg.Text,
+		))
+	}
+
+	return p.queueSelfOutboundMessage(ctx, strings.Join(lines, "\n"))
 }
 
 func (p *Poller) handleCancelCmd(ctx context.Context, cmd cancelCommand) error {
@@ -107,7 +127,7 @@ func (p *Poller) handleScheduleCmd(ctx context.Context, cmd scheduleCommand) err
 		RecipientIdentifier: recipientIdentifier,
 		Text:                cmd.Text,
 	}
-	outboundMessage, err := p.outboundSvc.CreateOutboundMessage(ctx, params)
+	outboundMessage, err := p.outboundSvc.CreateMessage(ctx, params)
 	if err != nil {
 		return fmt.Errorf("failed create outbound message: %w", err)
 	}
@@ -129,7 +149,7 @@ func (p *Poller) handleHelpCmd(ctx context.Context) error {
 		"/schedule tomorrow HH:mm \"Contact Name\" Message text",
 		"/schedule today HH:mm \"Contact Name\" Message text",
 		"",
-		"/list",
+		"/upcoming",
 		"",
 		"/cancel MESSAGE_ID",
 		"",
@@ -151,7 +171,7 @@ func (p *Poller) queueSelfOutboundMessage(ctx context.Context, text string) erro
 		RecipientIdentifier: p.account,
 		Text:                text,
 	}
-	if _, err := p.outboundSvc.CreateOutboundMessage(ctx, params); err != nil {
+	if _, err := p.outboundSvc.CreateMessage(ctx, params); err != nil {
 		return fmt.Errorf("failed queue self message: %w", err)
 	}
 

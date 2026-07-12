@@ -11,7 +11,7 @@ import (
 
 const (
 	commandHelp           = "/help"
-	commandList           = "/list"
+	commandUpcoming       = "/upcoming"
 	commandCancelPrefix   = "/cancel "
 	commandSchedulePrefix = "/schedule "
 )
@@ -32,8 +32,8 @@ func (p *parser) Parse(raw string, now time.Time) (parsedCommand, error) {
 	switch {
 	case text == commandHelp:
 		return helpCommand{}, nil
-	case text == commandList:
-		return listCommand{}, nil
+	case text == commandUpcoming:
+		return upcomingCommand{}, nil
 	case strings.HasPrefix(text, commandCancelPrefix):
 		return parseCancel(text)
 	case strings.HasPrefix(text, commandSchedulePrefix):

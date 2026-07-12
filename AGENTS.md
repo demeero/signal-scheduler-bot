@@ -117,7 +117,7 @@ Supported commands:
 
 /schedule today HH:mm "Contact Name" Message
 
-/list
+/upcoming
 
 /cancel MESSAGE_ID
 
