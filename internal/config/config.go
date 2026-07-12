@@ -10,12 +10,12 @@ import (
 )
 
 type Config struct {
+	Timezone  string `default:"Europe/Kyiv" json:"timezone"`
 	Signal    Signal `json:"signal"`
 	Log       Log    `json:"log"`
 	Bolt      Bolt   `json:"bolt"`
-	Bot       Bot    `json:"bot"`
 	Outbox    Outbox `json:"outbox"`
-	Timezone  string `default:"Europe/Kyiv" json:"timezone"`
+	Bot       Bot    `json:"bot"`
 	LogConfig bool   `default:"true"        json:"log_config" split_words:"true"`
 }
 

@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -39,67 +40,36 @@ func main() {
 func run(ctx context.Context, cfg config.Config) error {
 	location, err := time.LoadLocation(cfg.Timezone)
 	if err != nil {
-		return fmt.Errorf("load scheduler timezone: %w", err)
+		return fmt.Errorf("failed load timezone: %w", err)
 	}
 
 	db, err := openBoltDB(cfg.Bolt)
 	if err != nil {
 		return err
 	}
-	defer closeBoltDB(db)
+	defer func() {
+		if err := db.Close(); err != nil {
+			slog.Error("failed close bolt database", "err", err)
+		}
+	}()
 
-	signalAdapter := newSignalAdapter(cfg)
+	signalAdapter := signaladapter.New(cfg.Signal.Account, cfg.Signal.APIBaseURL, &http.Client{Timeout: cfg.Signal.RequestTimeout})
 
 	outboxSvc, err := outbox.New(cfg.Outbox.MaxAttempts, db, signalAdapter)
 	if err != nil {
-		return fmt.Errorf("init outbox service: %w", err)
+		return fmt.Errorf("failed init outbox service: %w", err)
 	}
 
 	botPoller := bot.New(cfg.Signal.Account, location, signalAdapter, outboxSvc)
 
-	go func() {
-		slog.Info("started inbound polling worker", "interval", cfg.Bot.PollInterval)
-		for {
-			if err := botPoller.Poll(ctx); err != nil {
-				slog.Error("failed poll", "err", err)
-			}
-
-			select {
-			case <-ctx.Done():
-				slog.Info("ctx done received - finish inbound polling")
-				return
-			case <-time.After(cfg.Bot.PollInterval):
-			}
-		}
-	}()
-
-	go func() {
-		slog.Info("started outbox send worker", "interval", cfg.Outbox.WorkerInterval)
-		for {
-			if err := outboxSvc.SendDue(ctx); err != nil {
-				slog.Error("failed send due outbox messages", "err", err)
-			}
-
-			select {
-			case <-ctx.Done():
-				slog.Info("ctx done received - finish outbox sending")
-				return
-			case <-time.After(cfg.Outbox.WorkerInterval):
-			}
-		}
-	}()
+	var wg sync.WaitGroup
+	runPeriodicWorker(ctx, &wg, "inbound polling", cfg.Bot.PollInterval, botPoller.Poll)
+	runPeriodicWorker(ctx, &wg, "outbox sending", cfg.Outbox.WorkerInterval, outboxSvc.SendDue)
 
 	<-ctx.Done()
+	wg.Wait()
+
 	return nil
-}
-
-func newSignalAdapter(cfg config.Config) *signaladapter.SignalAdapter {
-	timeout := cfg.Signal.RequestTimeout
-	if timeout <= 0 {
-		timeout = 15 * time.Second
-	}
-
-	return signaladapter.New(cfg.Signal.Account, cfg.Signal.APIBaseURL, &http.Client{Timeout: timeout})
 }
 
 func openBoltDB(cfg config.Bolt) (*bolt.DB, error) {
@@ -112,12 +82,7 @@ func openBoltDB(cfg config.Bolt) (*bolt.DB, error) {
 		return nil, fmt.Errorf("create bolt parent directory: %w", err)
 	}
 
-	timeout := cfg.Timeout
-	if timeout <= 0 {
-		timeout = 5 * time.Second
-	}
-
-	db, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: timeout})
+	db, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: cfg.Timeout})
 	if err != nil {
 		return nil, fmt.Errorf("open bolt database: %w", err)
 	}
@@ -125,8 +90,25 @@ func openBoltDB(cfg config.Bolt) (*bolt.DB, error) {
 	return db, nil
 }
 
-func closeBoltDB(db *bolt.DB) {
-	if err := db.Close(); err != nil {
-		slog.Error("failed close bolt database", "err", err)
-	}
+func runPeriodicWorker(ctx context.Context, wg *sync.WaitGroup, name string, interval time.Duration, fn func(context.Context) error) {
+	wg.Go(func() {
+		slog.Info("started worker", "worker", name, "interval", interval)
+		for {
+			if err := fn(ctx); err != nil {
+				if ctx.Err() != nil {
+					slog.Info("stopped worker", "worker", name)
+					return
+				}
+
+				slog.Error("worker iteration failed", "worker", name, "err", err)
+			}
+
+			select {
+			case <-ctx.Done():
+				slog.Info("stopped worker", "worker", name)
+				return
+			case <-time.After(interval):
+			}
+		}
+	})
 }
