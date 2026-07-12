@@ -14,16 +14,15 @@ type receiveResponseItem struct {
 }
 
 type envelope struct {
-	SourceNumber             *string        `json:"sourceNumber"`
-	SyncMessage              *syncMessage   `json:"syncMessage,omitempty"`
-	TypingMessage            *typingMessage `json:"typingMessage,omitempty"`
-	Source                   string         `json:"source"`
-	SourceUUID               string         `json:"sourceUuid"`
-	SourceName               string         `json:"sourceName"`
-	SourceDevice             int64          `json:"sourceDevice"`
-	Timestamp                int64          `json:"timestamp"`
-	ServerReceivedTimestamp  int64          `json:"serverReceivedTimestamp"`
-	ServerDeliveredTimestamp int64          `json:"serverDeliveredTimestamp"`
+	SourceNumber             *string      `json:"sourceNumber"`
+	SyncMessage              *syncMessage `json:"syncMessage,omitempty"`
+	Source                   string       `json:"source"`
+	SourceUUID               string       `json:"sourceUuid"`
+	SourceName               string       `json:"sourceName"`
+	SourceDevice             int64        `json:"sourceDevice"`
+	Timestamp                int64        `json:"timestamp"`
+	ServerReceivedTimestamp  int64        `json:"serverReceivedTimestamp"`
+	ServerDeliveredTimestamp int64        `json:"serverDeliveredTimestamp"`
 }
 
 type syncMessage struct {
@@ -36,15 +35,7 @@ type sentMessage struct {
 	DestinationUUID    string `json:"destinationUuid"`
 	Message            string `json:"message"`
 	Timestamp          int64  `json:"timestamp"`
-	ExpiresInSeconds   int64  `json:"expiresInSeconds"`
 	IsExpirationUpdate bool   `json:"isExpirationUpdate"`
-	ViewOnce           bool   `json:"viewOnce"`
-}
-
-type typingMessage struct {
-	Action    string `json:"action"`
-	GroupID   string `json:"groupId"`
-	Timestamp int64  `json:"timestamp"`
 }
 
 type contactsResponse []contact
@@ -55,7 +46,6 @@ type contact struct {
 	Name        string `json:"name"`
 	ProfileName string `json:"profile_name"`
 	Username    string `json:"username"`
-	Color       string `json:"color"`
 	Blocked     bool   `json:"blocked"`
 }
 

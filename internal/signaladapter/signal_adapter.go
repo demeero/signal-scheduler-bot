@@ -226,9 +226,11 @@ func receiveResp(account string, resp *http.Response) ([]SignalMessage, error) {
 		}
 
 		result = append(result, SignalMessage{
-			SentAt:          time.UnixMilli(msg.Timestamp),
-			SourceMessageID: fmt.Sprintf("%s:%d", item.Envelope.SourceUUID, msg.Timestamp),
-			Body:            msg.Message,
+			SentAt:            time.UnixMilli(msg.Timestamp),
+			ServerReceivedAt:  time.UnixMilli(item.Envelope.ServerReceivedTimestamp),
+			ServerDeliveredAt: time.UnixMilli(item.Envelope.ServerDeliveredTimestamp),
+			SourceMessageID:   fmt.Sprintf("%s:%d", item.Envelope.SourceUUID, msg.Timestamp),
+			Body:              msg.Message,
 		})
 	}
 

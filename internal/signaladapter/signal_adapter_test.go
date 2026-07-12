@@ -177,7 +177,9 @@ func TestSignalAdapter_ReceiveSelfMessages(t *testing.T) {
 			{
 				Account: account,
 				Envelope: envelope{
-					SourceUUID: "self-number",
+					SourceUUID:               "self-number",
+					ServerReceivedTimestamp:  1_780_293_401_000,
+					ServerDeliveredTimestamp: 1_780_293_402_000,
 					SyncMessage: &syncMessage{
 						SentMessage: &sentMessage{
 							DestinationNumber: account,
@@ -190,7 +192,9 @@ func TestSignalAdapter_ReceiveSelfMessages(t *testing.T) {
 			{
 				Account: account,
 				Envelope: envelope{
-					SourceUUID: "self-destination",
+					SourceUUID:               "self-destination",
+					ServerReceivedTimestamp:  1_780_293_501_000,
+					ServerDeliveredTimestamp: 1_780_293_502_000,
 					SyncMessage: &syncMessage{
 						SentMessage: &sentMessage{
 							Destination: account,
@@ -213,10 +217,14 @@ func TestSignalAdapter_ReceiveSelfMessages(t *testing.T) {
 	require.Equal(t, "/help", messages[0].Body)
 	require.Equal(t, "self-number:1780293400000", messages[0].SourceMessageID)
 	require.Equal(t, time.UnixMilli(1_780_293_400_000), messages[0].SentAt)
+	require.Equal(t, time.UnixMilli(1_780_293_401_000), messages[0].ServerReceivedAt)
+	require.Equal(t, time.UnixMilli(1_780_293_402_000), messages[0].ServerDeliveredAt)
 
 	require.Equal(t, "ping", messages[1].Body)
 	require.Equal(t, "self-destination:1780293500000", messages[1].SourceMessageID)
 	require.Equal(t, time.UnixMilli(1_780_293_500_000), messages[1].SentAt)
+	require.Equal(t, time.UnixMilli(1_780_293_501_000), messages[1].ServerReceivedAt)
+	require.Equal(t, time.UnixMilli(1_780_293_502_000), messages[1].ServerDeliveredAt)
 }
 
 func TestSignalAdapter_ReceiveSelfMessages_HTTPJSONError(t *testing.T) {
