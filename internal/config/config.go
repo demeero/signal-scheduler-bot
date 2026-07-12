@@ -10,12 +10,13 @@ import (
 )
 
 type Config struct {
-	Signal    Signal    `json:"signal"`
-	Log       Log       `json:"log"`
-	Bolt      Bolt      `json:"bolt"`
-	Scheduler Scheduler `json:"scheduler"`
-	Retry     Retry     `json:"retry"`
-	LogConfig bool      `default:"true"   json:"log_config" split_words:"true"`
+	Signal    Signal `json:"signal"`
+	Log       Log    `json:"log"`
+	Bolt      Bolt   `json:"bolt"`
+	Bot       Bot    `json:"bot"`
+	Outbox    Outbox `json:"outbox"`
+	Timezone  string `default:"Europe/Kyiv" json:"timezone"`
+	LogConfig bool   `default:"true"        json:"log_config" split_words:"true"`
 }
 
 type Log struct {
@@ -45,16 +46,14 @@ type Signal struct {
 	RequestTimeout time.Duration `default:"30s" json:"request_timeout" split_words:"true"`
 }
 
-type Scheduler struct {
-	// Timezone is the default timezone for parsing scheduled commands.
-	Timezone string `default:"Europe/Kyiv" json:"timezone"`
+type Bot struct {
 	// PollInterval controls how often the incoming poller runs.
 	PollInterval time.Duration `default:"5s" json:"poll_interval" split_words:"true"`
-	// WorkerInterval controls how often due scheduled messages are scanned.
-	WorkerInterval time.Duration `default:"1s" json:"worker_interval" split_words:"true"`
 }
 
-type Retry struct {
+type Outbox struct {
+	// WorkerInterval controls how often due scheduled messages are scanned.
+	WorkerInterval time.Duration `default:"1s" json:"worker_interval" split_words:"true"`
 	// MaxAttempts is the maximum number of send attempts.
 	MaxAttempts uint16 `default:"5" json:"max_attempts" split_words:"true"`
 }

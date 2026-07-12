@@ -37,7 +37,7 @@ func main() {
 }
 
 func run(ctx context.Context, cfg config.Config) error {
-	location, err := time.LoadLocation(cfg.Scheduler.Timezone)
+	location, err := time.LoadLocation(cfg.Timezone)
 	if err != nil {
 		return fmt.Errorf("load scheduler timezone: %w", err)
 	}
@@ -50,7 +50,7 @@ func run(ctx context.Context, cfg config.Config) error {
 
 	signalAdapter := newSignalAdapter(cfg)
 
-	outboundSvc, err := outbound.New(cfg.Retry.MaxAttempts, db, signalAdapter)
+	outboundSvc, err := outbound.New(cfg.Outbox.MaxAttempts, db, signalAdapter)
 	if err != nil {
 		return fmt.Errorf("init outbound adapter: %w", err)
 	}
@@ -58,7 +58,7 @@ func run(ctx context.Context, cfg config.Config) error {
 	botPoller := bot.New(cfg.Signal.Account, location, signalAdapter, outboundSvc)
 
 	go func() {
-		slog.Info("started inbound polling worker", "interval", cfg.Scheduler.PollInterval)
+		slog.Info("started inbound polling worker", "interval", cfg.Bot.PollInterval)
 		for {
 			if err := botPoller.Poll(ctx); err != nil {
 				slog.Error("failed poll", "err", err)
@@ -68,13 +68,13 @@ func run(ctx context.Context, cfg config.Config) error {
 			case <-ctx.Done():
 				slog.Info("ctx done received - finish inbound polling")
 				return
-			case <-time.After(cfg.Scheduler.PollInterval):
+			case <-time.After(cfg.Bot.PollInterval):
 			}
 		}
 	}()
 
 	go func() {
-		slog.Info("started outbound send worker", "interval", cfg.Scheduler.WorkerInterval)
+		slog.Info("started outbound send worker", "interval", cfg.Outbox.WorkerInterval)
 		for {
 			if err := outboundSvc.SendDue(ctx); err != nil {
 				slog.Error("failed send due outbound messages", "err", err)
@@ -84,7 +84,7 @@ func run(ctx context.Context, cfg config.Config) error {
 			case <-ctx.Done():
 				slog.Info("ctx done received - finish outbound sending")
 				return
-			case <-time.After(cfg.Scheduler.WorkerInterval):
+			case <-time.After(cfg.Outbox.WorkerInterval):
 			}
 		}
 	}()
