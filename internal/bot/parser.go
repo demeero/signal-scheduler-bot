@@ -5,16 +5,16 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/demeero/signal-scheduler-bot/internal/errbrick"
 )
 
 const (
-	commandCancel         = "/cancel"
-	commandHelp           = "/help"
-	commandUpcoming       = "/upcoming"
-	commandCancelPrefix   = "/cancel "
-	commandSchedulePrefix = "/schedule "
+	commandCancel   = "/cancel"
+	commandHelp     = "/help"
+	commandUpcoming = "/upcoming"
+	commandSchedule = "/schedule"
 )
 
 // parser parses raw bot commands into transport-local command values.
@@ -30,22 +30,33 @@ func newParser(location *time.Location) *parser {
 // Parse parses a raw incoming command into a typed command.
 func (p *parser) Parse(raw string, now time.Time) (parsedCommand, error) {
 	text := strings.TrimSpace(raw)
-	switch {
-	case text == commandHelp:
+	command, args, err := cutFieldOrRemainder(text)
+	if err != nil {
+		return nil, fmt.Errorf("%w: unsupported command", errbrick.ErrInvalidData)
+	}
+
+	switch command {
+	case commandHelp:
+		if strings.TrimSpace(args) != "" {
+			return nil, fmt.Errorf("%w: unsupported command", errbrick.ErrInvalidData)
+		}
 		return helpCommand{}, nil
-	case text == commandUpcoming:
+	case commandUpcoming:
+		if strings.TrimSpace(args) != "" {
+			return nil, fmt.Errorf("%w: unsupported command", errbrick.ErrInvalidData)
+		}
 		return upcomingCommand{}, nil
-	case text == commandCancel || strings.HasPrefix(text, commandCancelPrefix):
-		return parseCancel(text)
-	case strings.HasPrefix(text, commandSchedulePrefix):
-		return p.parseSchedule(text, now)
+	case commandCancel:
+		return parseCancel(args)
+	case commandSchedule:
+		return p.parseSchedule(args, now)
 	default:
 		return nil, fmt.Errorf("%w: unsupported command", errbrick.ErrInvalidData)
 	}
 }
 
-func parseCancel(text string) (parsedCommand, error) {
-	idText := strings.TrimSpace(strings.TrimPrefix(text, commandCancel))
+func parseCancel(args string) (parsedCommand, error) {
+	idText := strings.TrimSpace(args)
 	if idText == "" {
 		return nil, fmt.Errorf("%w: cancel message id is empty", errbrick.ErrInvalidData)
 	}
@@ -58,8 +69,8 @@ func parseCancel(text string) (parsedCommand, error) {
 	return cancelCommand{id: id}, nil
 }
 
-func (p *parser) parseSchedule(text string, now time.Time) (parsedCommand, error) {
-	rest := strings.TrimSpace(strings.TrimPrefix(text, commandSchedulePrefix))
+func (p *parser) parseSchedule(args string, now time.Time) (parsedCommand, error) {
+	rest := strings.TrimSpace(args)
 	dateToken, rest, err := cutField(rest)
 	if err != nil {
 		return nil, err
@@ -80,17 +91,17 @@ func (p *parser) parseSchedule(text string, now time.Time) (parsedCommand, error
 		return nil, fmt.Errorf("%w: schedule message body is empty", errbrick.ErrInvalidData)
 	}
 
-	whenUTC, localText, err := p.parseWhen(now, dateToken, timeToken)
+	when, localText, err := p.parseWhen(now, dateToken, timeToken)
 	if err != nil {
 		return nil, err
 	}
 
-	if whenUTC.Before(now.UTC()) {
+	if when.Before(now.UTC()) {
 		return nil, fmt.Errorf("%w: scheduled time is in the past", errbrick.ErrInvalidData)
 	}
 
 	return scheduleCommand{
-		When:              whenUTC,
+		When:              when,
 		OriginalLocalTime: localText,
 		Timezone:          p.location.String(),
 		Recipient:         recipient,
@@ -155,15 +166,8 @@ func cutRecipient(text string) (string, string, error) {
 		return "", "", fmt.Errorf("%w: recipient is empty", errbrick.ErrInvalidData)
 	}
 
-	if strings.HasPrefix(text, "\"") {
-		end := strings.Index(text[1:], "\"")
-		if end < 0 {
-			return "", "", fmt.Errorf("%w: contact name is missing closing quote", errbrick.ErrInvalidData)
-		}
-
-		name := text[1 : end+1]
-
-		return name, text[end+2:], nil
+	if open, close, ok := quotePair(text); ok {
+		return cutQuotedRecipient(text, open, close)
 	}
 
 	token, rest, err := cutFieldOrRemainder(text)
@@ -172,6 +176,47 @@ func cutRecipient(text string) (string, string, error) {
 	}
 
 	return token, rest, nil
+}
+
+func cutQuotedRecipient(text, openQuote, closeQuote string) (string, string, error) {
+	trimmed := strings.TrimSpace(text)
+	quoted := []rune(trimmed)
+	if len(quoted) == 0 {
+		return "", "", fmt.Errorf("%w: recipient is empty", errbrick.ErrInvalidData)
+	}
+
+	openRune := []rune(openQuote)[0]
+	closeRune := []rune(closeQuote)[0]
+	closingQuotes := supportedClosingQuotes()
+
+	for idx := 1; idx < len(quoted); idx++ {
+		switch quoted[idx] {
+		case closeRune:
+			name := strings.TrimSpace(string(quoted[1:idx]))
+			if name == "" {
+				return "", "", fmt.Errorf("%w: recipient is empty", errbrick.ErrInvalidData)
+			}
+
+			rest := quoted[idx+1:]
+			if len(rest) == 0 {
+				return name, "", nil
+			}
+
+			if !unicode.IsSpace(rest[0]) {
+				return "", "", fmt.Errorf("%w: expected whitespace after closing quote", errbrick.ErrInvalidData)
+			}
+
+			return name, string(rest[1:]), nil
+		case openRune:
+			continue
+		default:
+			if _, ok := closingQuotes[quoted[idx]]; ok {
+				return "", "", fmt.Errorf("%w: contact name uses mismatched quotes", errbrick.ErrInvalidData)
+			}
+		}
+	}
+
+	return "", "", fmt.Errorf("%w: contact name is missing closing quote", errbrick.ErrInvalidData)
 }
 
 func cutFieldOrRemainder(text string) (string, string, error) {
@@ -187,4 +232,28 @@ func cutFieldOrRemainder(text string) (string, string, error) {
 	}
 
 	return text, "", nil
+}
+
+func quotePair(text string) (string, string, bool) {
+	for _, pair := range [][2]string{
+		{`"`, `"`},
+		{"“", "”"},
+		{"„", "“"},
+		{"«", "»"},
+	} {
+		if strings.HasPrefix(text, pair[0]) {
+			return pair[0], pair[1], true
+		}
+	}
+
+	return "", "", false
+}
+
+func supportedClosingQuotes() map[rune]struct{} {
+	return map[rune]struct{}{
+		'"': {},
+		'”': {},
+		'“': {},
+		'»': {},
+	}
 }
