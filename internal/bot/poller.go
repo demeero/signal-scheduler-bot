@@ -160,7 +160,7 @@ func (p *Poller) handleHelpCmd(ctx context.Context) error {
 		"/schedule today HH:mm \"Contact Name\" Message text",
 		`Quoted contact names also accept typographic double quotes and «guillemets».`,
 		"",
-		"/upcoming",
+		commandUpcoming,
 		"",
 		"/cancel MESSAGE_ID",
 		"",

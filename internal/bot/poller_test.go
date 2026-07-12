@@ -32,7 +32,7 @@ func TestPoller_Poll_UpcomingNoUpcomingMessages(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	poller := newTestPoller(t, fixture.service, "+380999999999", location, []string{"/upcoming"}, nil)
+	poller := newTestPoller(t, fixture.service, location, []string{"/upcoming"}, nil)
 
 	err = poller.Poll(t.Context())
 	require.NoError(t, err)
@@ -43,7 +43,7 @@ func TestPoller_Poll_UpcomingNoUpcomingMessages(t *testing.T) {
 
 	reply := messages[len(messages)-1]
 	require.Equal(t, "Upcoming messages: 0", reply.Text)
-	require.Equal(t, "+380999999999", reply.Recipient)
+	require.Equal(t, testAccount, reply.Recipient)
 }
 
 func TestPoller_Poll_UpcomingListsFuturePendingMessages(t *testing.T) {
@@ -85,7 +85,7 @@ func TestPoller_Poll_UpcomingListsFuturePendingMessages(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	poller := newTestPoller(t, fixture.service, "+380999999999", location, []string{"/upcoming"}, nil)
+	poller := newTestPoller(t, fixture.service, location, []string{"/upcoming"}, nil)
 
 	err = poller.Poll(t.Context())
 	require.NoError(t, err)
@@ -95,7 +95,7 @@ func TestPoller_Poll_UpcomingListsFuturePendingMessages(t *testing.T) {
 	require.Len(t, messages, 5)
 
 	reply := messages[len(messages)-1]
-	require.Equal(t, "+380999999999", reply.Recipient)
+	require.Equal(t, testAccount, reply.Recipient)
 	require.Equal(t, strings.Join([]string{
 		"Upcoming messages: 3",
 		formatUpcomingLine(location, earlier),
@@ -117,7 +117,7 @@ func TestPoller_Poll_UpcomingHidesOverduePendingMessages(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	poller := newTestPoller(t, fixture.service, "+380999999999", location, []string{"/upcoming"}, nil)
+	poller := newTestPoller(t, fixture.service, location, []string{"/upcoming"}, nil)
 
 	err = poller.Poll(t.Context())
 	require.NoError(t, err)
@@ -150,7 +150,6 @@ func TestPoller_Poll_CancelCmd(t *testing.T) {
 	poller := newTestPoller(
 		t,
 		fixture.service,
-		"+380999999999",
 		location,
 		[]string{"/cancel " + strconv.FormatUint(created.ID, 10)},
 		nil,
@@ -169,7 +168,7 @@ func TestPoller_Poll_CancelCmd(t *testing.T) {
 
 	reply := messages[len(messages)-1]
 	require.Equal(t, "Cancelled message "+strconv.FormatUint(created.ID, 10)+".", reply.Text)
-	require.Equal(t, "+380999999999", reply.Recipient)
+	require.Equal(t, testAccount, reply.Recipient)
 }
 
 func TestPoller_Poll_CancelCmdReturnsNotFound(t *testing.T) {
@@ -177,7 +176,7 @@ func TestPoller_Poll_CancelCmdReturnsNotFound(t *testing.T) {
 	require.NoError(t, err)
 
 	fixture := newTestOutboxFixture(t)
-	poller := newTestPoller(t, fixture.service, "+380999999999", location, []string{"/cancel 42"}, nil)
+	poller := newTestPoller(t, fixture.service, location, []string{"/cancel 42"}, nil)
 
 	err = poller.Poll(t.Context())
 	require.NoError(t, err)
@@ -187,7 +186,7 @@ func TestPoller_Poll_CancelCmdReturnsNotFound(t *testing.T) {
 	require.Len(t, messages, 1)
 
 	reply := messages[0]
-	require.Equal(t, "+380999999999", reply.Recipient)
+	require.Equal(t, testAccount, reply.Recipient)
 	require.Contains(t, reply.Text, "failed cancel outbox message")
 	require.Contains(t, reply.Text, "outbox message 42")
 }
@@ -208,7 +207,6 @@ func TestPoller_Poll_CancelCmdReturnsConflict(t *testing.T) {
 	poller := newTestPoller(
 		t,
 		fixture.service,
-		"+380999999999",
 		location,
 		[]string{"/cancel " + strconv.FormatUint(created.ID, 10)},
 		nil,
@@ -226,7 +224,7 @@ func TestPoller_Poll_CancelCmdReturnsConflict(t *testing.T) {
 	require.Len(t, messages, 2)
 
 	reply := messages[len(messages)-1]
-	require.Equal(t, "+380999999999", reply.Recipient)
+	require.Equal(t, testAccount, reply.Recipient)
 	require.Contains(t, reply.Text, "failed cancel outbox message")
 	require.Contains(t, reply.Text, "already due")
 }
@@ -236,7 +234,7 @@ func TestPoller_Poll_ScheduleCmd(t *testing.T) {
 	require.NoError(t, err)
 
 	fixture := newTestOutboxFixture(t)
-	account := "+380999999999"
+	account := testAccount
 	scheduledLocal := time.Now().In(location).AddDate(0, 0, 2)
 	scheduledLocal = time.Date(
 		scheduledLocal.Year(),
@@ -252,7 +250,6 @@ func TestPoller_Poll_ScheduleCmd(t *testing.T) {
 	poller := newTestPoller(
 		t,
 		fixture.service,
-		account,
 		location,
 		[]string{fmt.Sprintf(
 			`/schedule %s %s "Alice Smith" Hello there`,
@@ -299,6 +296,8 @@ type testOutboxFixture struct {
 	service *outbox.Service
 }
 
+const testAccount = "+380999999999"
+
 func newTestOutboxFixture(t *testing.T) testOutboxFixture {
 	t.Helper()
 
@@ -323,7 +322,7 @@ func newTestOutboxFixture(t *testing.T) testOutboxFixture {
 	}))
 	t.Cleanup(server.Close)
 
-	signalClient := signaladapter.New("+380999999999", server.URL, &http.Client{Timeout: time.Second})
+	signalClient := signaladapter.New(testAccount, server.URL, &http.Client{Timeout: time.Second})
 
 	service, err := outbox.New(5, 15*time.Minute, db, signalClient)
 	require.NoError(t, err)
@@ -337,7 +336,6 @@ func newTestOutboxFixture(t *testing.T) testOutboxFixture {
 func newTestPoller(
 	t *testing.T,
 	outboxSvc *outbox.Service,
-	account string,
 	location *time.Location,
 	receiveBodies []string,
 	contacts []map[string]string,
@@ -346,7 +344,7 @@ func newTestPoller(
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/v1/receive/"+account:
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/receive/"+testAccount:
 			query := r.URL.Query()
 			if query.Get("ignore_attachments") != "true" ||
 				query.Get("ignore_stories") != "true" ||
@@ -358,8 +356,8 @@ func newTestPoller(
 				return
 			}
 
-			writeReceiveMessagesJSON(t, w, account, receiveBodies)
-		case r.Method == http.MethodGet && r.URL.Path == "/v1/contacts/"+account:
+			writeReceiveMessagesJSON(t, w, testAccount, receiveBodies)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/contacts/"+testAccount:
 			if err := json.NewEncoder(w).Encode(contacts); err != nil {
 				t.Errorf("failed to encode contacts response: %v", err)
 			}
@@ -370,8 +368,8 @@ func newTestPoller(
 	}))
 	t.Cleanup(server.Close)
 
-	signalClient := signaladapter.New(account, server.URL, &http.Client{Timeout: time.Second})
-	return New(account, location, signalClient, outboxSvc)
+	signalClient := signaladapter.New(testAccount, server.URL, &http.Client{Timeout: time.Second})
+	return New(testAccount, location, signalClient, outboxSvc)
 }
 
 func writeReceiveMessagesJSON(t *testing.T, w http.ResponseWriter, account string, bodies []string) {

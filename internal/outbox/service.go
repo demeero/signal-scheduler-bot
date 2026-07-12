@@ -55,9 +55,9 @@ func New(maxAttempts uint16, maxAge time.Duration, db *bbolt.DB, signalClient *s
 func (s *Service) CreateMessage(_ context.Context, params CreateMessageParams) (Message, error) {
 	var msg Message
 	err := s.db.Update(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket(outboxMessagesBucket)
-		if bucket == nil {
-			return errors.New("outbox messages bucket does not exist")
+		bucket, err := messagesBucket(tx)
+		if err != nil {
+			return err
 		}
 
 		seq, err := bucket.NextSequence()
@@ -70,16 +70,7 @@ func (s *Service) CreateMessage(_ context.Context, params CreateMessageParams) (
 			return fmt.Errorf("failed create outbox message: %w", err)
 		}
 
-		data, err := json.Marshal(msg)
-		if err != nil {
-			return fmt.Errorf("failed encode outbox message: %w", err)
-		}
-
-		if err := bucket.Put(msg.key(), data); err != nil {
-			return fmt.Errorf("failed store outbox message: %w", err)
-		}
-
-		return nil
+		return storeMessage(bucket, msg)
 	})
 	if err != nil {
 		return Message{}, fmt.Errorf("failed put outbox message: %w", err)
@@ -122,19 +113,9 @@ func (s *Service) CancelMessage(_ context.Context, id uint64) (Message, error) {
 	var cancelled Message
 
 	err := s.db.Update(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket(outboxMessagesBucket)
-		if bucket == nil {
-			return errors.New("outbox messages bucket does not exist")
-		}
-
-		raw := bucket.Get(outboxMessageKey(id))
-		if raw == nil {
-			return fmt.Errorf("%w: outbox message %d", errbrick.ErrNotFound, id)
-		}
-
-		var msg Message
-		if err := json.Unmarshal(raw, &msg); err != nil {
-			return fmt.Errorf("failed decode outbox message: %w", err)
+		msg, bucket, err := s.loadMessageForUpdate(tx, id)
+		if err != nil {
+			return err
 		}
 
 		cancelledMsg, err := msg.Cancel()
@@ -143,16 +124,7 @@ func (s *Service) CancelMessage(_ context.Context, id uint64) (Message, error) {
 		}
 		cancelled = cancelledMsg
 
-		data, err := json.Marshal(cancelled)
-		if err != nil {
-			return fmt.Errorf("failed encode outbox message: %w", err)
-		}
-
-		if err := bucket.Put(cancelled.key(), data); err != nil {
-			return fmt.Errorf("failed store outbox message: %w", err)
-		}
-
-		return nil
+		return storeMessage(bucket, cancelled)
 	})
 	if err != nil {
 		return Message{}, fmt.Errorf("failed cancel outbox message: %w", err)
@@ -409,9 +381,9 @@ func (s *Service) rollbackSendAttempt(previous Message) error {
 }
 
 func (s *Service) loadMessageForUpdate(tx *bbolt.Tx, id uint64) (Message, *bbolt.Bucket, error) {
-	bucket := tx.Bucket(outboxMessagesBucket)
-	if bucket == nil {
-		return Message{}, nil, errors.New("outbox messages bucket does not exist")
+	bucket, err := messagesBucket(tx)
+	if err != nil {
+		return Message{}, nil, err
 	}
 
 	raw := bucket.Get(outboxMessageKey(id))
@@ -419,12 +391,30 @@ func (s *Service) loadMessageForUpdate(tx *bbolt.Tx, id uint64) (Message, *bbolt
 		return Message{}, nil, fmt.Errorf("%w: outbox message %d", errbrick.ErrNotFound, id)
 	}
 
-	var msg Message
-	if err := json.Unmarshal(raw, &msg); err != nil {
-		return Message{}, nil, fmt.Errorf("failed decode outbox message: %w", err)
+	msg, err := decodeMessage(raw)
+	if err != nil {
+		return Message{}, nil, err
 	}
 
 	return msg, bucket, nil
+}
+
+func messagesBucket(tx *bbolt.Tx) (*bbolt.Bucket, error) {
+	bucket := tx.Bucket(outboxMessagesBucket)
+	if bucket == nil {
+		return nil, errors.New("outbox messages bucket does not exist")
+	}
+
+	return bucket, nil
+}
+
+func decodeMessage(raw []byte) (Message, error) {
+	var msg Message
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		return Message{}, fmt.Errorf("failed decode outbox message: %w", err)
+	}
+
+	return msg, nil
 }
 
 func storeMessage(bucket *bbolt.Bucket, msg Message) error {

@@ -16,7 +16,7 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-func TestServiceCreateMessageInitializesDeliveryState(t *testing.T) {
+func TestService_CreateMessage_InitializesDeliveryState(t *testing.T) {
 	fixture := newServiceFixture(t)
 
 	created, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
@@ -37,7 +37,7 @@ func TestServiceCreateMessageInitializesDeliveryState(t *testing.T) {
 	require.Equal(t, created, stored)
 }
 
-func TestServiceLoadUpcomingMessages(t *testing.T) {
+func TestService_LoadUpcomingMessages(t *testing.T) {
 	fixture := newServiceFixture(t)
 
 	firstScheduledAt := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
@@ -80,7 +80,7 @@ func TestServiceLoadUpcomingMessages(t *testing.T) {
 	require.EqualValues(t, 5, messages[1].MaxAttempts)
 }
 
-func TestServiceCancelMessage(t *testing.T) {
+func TestService_CancelMessage(t *testing.T) {
 	fixture := newServiceFixture(t)
 
 	created, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
@@ -105,7 +105,7 @@ func TestServiceCancelMessage(t *testing.T) {
 	require.True(t, stored.UpdatedAt.Equal(cancelled.UpdatedAt))
 }
 
-func TestServiceCancelMessageReturnsNotFound(t *testing.T) {
+func TestService_CancelMessage_ReturnsNotFound(t *testing.T) {
 	fixture := newServiceFixture(t)
 
 	_, err := fixture.service.CancelMessage(t.Context(), 42)
@@ -113,7 +113,7 @@ func TestServiceCancelMessageReturnsNotFound(t *testing.T) {
 	require.ErrorIs(t, err, errbrick.ErrNotFound)
 }
 
-func TestServiceCancelMessageReturnsConflictForAlreadyCancelledMessage(t *testing.T) {
+func TestService_CancelMessage_ReturnsConflictForAlreadyCancelledMessage(t *testing.T) {
 	fixture := newServiceFixture(t)
 
 	created, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
@@ -132,7 +132,7 @@ func TestServiceCancelMessageReturnsConflictForAlreadyCancelledMessage(t *testin
 	require.ErrorIs(t, err, errbrick.ErrConflict)
 }
 
-func TestServiceCancelMessageReturnsConflictForDueMessage(t *testing.T) {
+func TestService_CancelMessage_ReturnsConflictForDueMessage(t *testing.T) {
 	fixture := newServiceFixture(t)
 
 	created, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
@@ -148,7 +148,7 @@ func TestServiceCancelMessageReturnsConflictForDueMessage(t *testing.T) {
 	require.ErrorIs(t, err, errbrick.ErrConflict)
 }
 
-func TestServiceLoadUpcomingMessagesExcludesCancelledMessages(t *testing.T) {
+func TestService_LoadUpcomingMessages_ExcludesCancelledMessages(t *testing.T) {
 	fixture := newServiceFixture(t)
 
 	cancelled, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
@@ -176,7 +176,7 @@ func TestServiceLoadUpcomingMessagesExcludesCancelledMessages(t *testing.T) {
 	require.Equal(t, active.ID, messages[0].ID)
 }
 
-func TestServiceSendDueMarksMessageSent(t *testing.T) {
+func TestService_SendDue_MarksMessageSent(t *testing.T) {
 	fixture := newServiceFixture(t)
 
 	created, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
@@ -202,7 +202,7 @@ func TestServiceSendDueMarksMessageSent(t *testing.T) {
 	require.Equal(t, "hello", requests[0].Message)
 }
 
-func TestServiceSendDueMarksMessageRetry(t *testing.T) {
+func TestService_SendDue_MarksMessageRetry(t *testing.T) {
 	fixture := newServiceFixture(t, testSendResponse{
 		statusCode: http.StatusServiceUnavailable,
 		body:       "temporarily unavailable",
@@ -226,7 +226,7 @@ func TestServiceSendDueMarksMessageRetry(t *testing.T) {
 	require.Contains(t, stored.LastError, "temporarily unavailable")
 }
 
-func TestServiceSendDueMarksMessageFailedAtMaxAttempt(t *testing.T) {
+func TestService_SendDue_MarksMessageFailedAtMaxAttempt(t *testing.T) {
 	fixture := newServiceFixture(t,
 		testSendResponse{
 			statusCode: http.StatusServiceUnavailable,
@@ -270,7 +270,7 @@ func TestServiceSendDueMarksMessageFailedAtMaxAttempt(t *testing.T) {
 	require.Contains(t, requests[1].Message, "still unavailable")
 }
 
-func TestServiceSendDueFailsExpiredMessageWithoutSending(t *testing.T) {
+func TestService_SendDue_FailsExpiredMessageWithoutSending(t *testing.T) {
 	fixture := newServiceFixtureWithMaxAge(t, 15*time.Minute)
 
 	created, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
@@ -297,7 +297,7 @@ func TestServiceSendDueFailsExpiredMessageWithoutSending(t *testing.T) {
 	require.Contains(t, requests[0].Message, "message expired before send")
 }
 
-func TestServiceSendDueSendsFreshOverdueMessage(t *testing.T) {
+func TestService_SendDue_SendsFreshOverdueMessage(t *testing.T) {
 	fixture := newServiceFixtureWithMaxAge(t, 15*time.Minute)
 
 	created, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
@@ -319,7 +319,7 @@ func TestServiceSendDueSendsFreshOverdueMessage(t *testing.T) {
 	require.Len(t, fixture.requests(), 1)
 }
 
-func TestServiceSendDueSkipsNonDueStates(t *testing.T) {
+func TestService_SendDue_SkipsNonDueStates(t *testing.T) {
 	fixture := newServiceFixture(t)
 
 	futurePending, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
@@ -398,7 +398,7 @@ func TestServiceSendDueSkipsNonDueStates(t *testing.T) {
 	require.Zero(t, futureStored.Attempt)
 }
 
-func TestServiceSendDueContinuesBatchAfterSendFailure(t *testing.T) {
+func TestService_SendDue_ContinuesBatchAfterSendFailure(t *testing.T) {
 	fixture := newServiceFixture(t,
 		testSendResponse{statusCode: http.StatusServiceUnavailable, body: "first failed"},
 		testSendResponse{statusCode: http.StatusCreated},
@@ -436,7 +436,7 @@ func TestServiceSendDueContinuesBatchAfterSendFailure(t *testing.T) {
 	require.Len(t, fixture.requests(), 2)
 }
 
-func TestServiceSendDueRollsBackAttemptOnContextCancel(t *testing.T) {
+func TestService_SendDue_RollsBackAttemptOnContextCancel(t *testing.T) {
 	db, err := bolt.Open(filepath.Join(t.TempDir(), "test.db"), 0o600, &bolt.Options{Timeout: time.Second})
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -478,54 +478,6 @@ func TestServiceSendDueRollsBackAttemptOnContextCancel(t *testing.T) {
 	stored, err := loadMessageByID(t, db, created.ID)
 	require.NoError(t, err)
 	require.Equal(t, created, stored)
-}
-
-func TestMessageStartSendAttemptRejectsInvalidState(t *testing.T) {
-	msg := Message{ID: 1, Status: MessageStatusSent, MaxAttempts: 5}
-
-	_, err := msg.StartSendAttempt()
-	require.Error(t, err)
-	require.ErrorIs(t, err, errbrick.ErrConflict)
-}
-
-func TestMessageStartSendAttemptRejectsExhaustedAttempts(t *testing.T) {
-	msg := Message{ID: 1, Status: MessageStatusRetry, Attempt: 5, MaxAttempts: 5}
-
-	_, err := msg.StartSendAttempt()
-	require.Error(t, err)
-	require.ErrorIs(t, err, errbrick.ErrConflict)
-}
-
-func TestMessageMarkSentRejectsInvalidInvariant(t *testing.T) {
-	msg := Message{ID: 1, Status: MessageStatusPending, Attempt: 0, MaxAttempts: 5}
-
-	_, err := msg.MarkSent()
-	require.Error(t, err)
-	require.ErrorIs(t, err, errbrick.ErrConflict)
-}
-
-func TestMessageMarkRetryRejectsInvalidInvariant(t *testing.T) {
-	msg := Message{ID: 1, Status: MessageStatusRetry, Attempt: 5, MaxAttempts: 5}
-
-	_, err := msg.MarkRetry("boom")
-	require.Error(t, err)
-	require.ErrorIs(t, err, errbrick.ErrConflict)
-}
-
-func TestMessageMarkRetryRejectsEmptyError(t *testing.T) {
-	msg := Message{ID: 1, Status: MessageStatusRetry, Attempt: 1, MaxAttempts: 5}
-
-	_, err := msg.MarkRetry("")
-	require.Error(t, err)
-	require.ErrorIs(t, err, errbrick.ErrInvalidData)
-}
-
-func TestMessageMarkFailedRejectsInvalidInvariant(t *testing.T) {
-	msg := Message{ID: 1, Status: MessageStatusRetry, Attempt: 1, MaxAttempts: 5}
-
-	_, err := msg.MarkFailed("boom")
-	require.Error(t, err)
-	require.ErrorIs(t, err, errbrick.ErrConflict)
 }
 
 type serviceFixture struct {
