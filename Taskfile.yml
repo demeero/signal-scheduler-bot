@@ -19,7 +19,7 @@ tasks:
       - docker run --rm -v ${PWD}/:/app -w /app golangci/golangci-lint:v{{.GOLANGCI_LINT_VERSION}}-alpine golangci-lint run -v
 
   fmt:
-    desc: Run Go linters
+    desc: Run Go formatting
     cmds:
       - docker run --rm -v ${PWD}/:/app -w /app golangci/golangci-lint:v{{.GOLANGCI_LINT_VERSION}}-alpine golangci-lint -v fmt
 
@@ -28,7 +28,7 @@ tasks:
     cmds:
       - task: build:binary
         vars:
-          BINARY_PATH: ./cmd/api/...
+          BINARY_PATH: ./cmd/botsrv/...
 
   build:binary:
     internal: true
@@ -36,7 +36,7 @@ tasks:
       GOOS: '{{.GOOS | default OS}}'
       GOARCH: '{{.GOARCH | default ARCH}}'
     cmds:
-      - GOOS={{.GOOS}} GOARCH={{.GOARCH}} go build -v -o bin {{.BINARY_PATH}}
+      - GOOS={{.GOOS}} GOARCH={{.GOARCH}} go build -v -o ./bin/signal_scheduler_bot {{.BINARY_PATH}}
 
   run:
     desc: Run API server locally.

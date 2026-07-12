@@ -61,7 +61,7 @@ func (p *Poller) Poll(ctx context.Context) error {
 			continue
 		}
 
-		msgLogger.Debug("received command", "name", cmd.Name())
+		msgLogger.Debug("received command", "name", commandName(cmd))
 
 		if err := p.handleCmd(ctx, cmd); err != nil {
 			msgLogger.Error("failed handle command", "err", err)
@@ -138,7 +138,13 @@ func (p *Poller) handleScheduleCmd(ctx context.Context, cmd scheduleCommand) err
 
 	return p.queueSelfOutboxMessage(
 		ctx,
-		fmt.Sprintf("Scheduled message %d for %s (%s) to %s.", outboxMessage.ID, cmd.OriginalLocalTime, cmd.Timezone, cmd.Recipient),
+		fmt.Sprintf(
+			"Scheduled message %d for %s (%s) to %s.",
+			outboxMessage.ID,
+			cmd.When.In(p.location).Format("2006-01-02 15:04"),
+			p.location.String(),
+			cmd.Recipient,
+		),
 	)
 }
 

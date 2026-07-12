@@ -198,6 +198,71 @@ func TestPollerHandleCancelCmdReturnsConflict(t *testing.T) {
 	require.ErrorContains(t, err, "failed cancel outbox message")
 }
 
+func TestPollerHandleScheduleCmd(t *testing.T) {
+	location, err := time.LoadLocation("Europe/Kyiv")
+	require.NoError(t, err)
+
+	fixture := newTestOutboxFixture(t)
+	account := "+380999999999"
+
+	contactsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("unexpected method: got %s want %s", r.Method, http.MethodGet)
+			http.Error(w, "unexpected method", http.StatusMethodNotAllowed)
+			return
+		}
+		if r.URL.Path != "/v1/contacts/"+account {
+			t.Errorf("unexpected path: got %s want %s", r.URL.Path, "/v1/contacts/"+account)
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+
+		if err := json.NewEncoder(w).Encode([]map[string]string{
+			{
+				"name":   "Alice Smith",
+				"number": "+380501112233",
+			},
+		}); err != nil {
+			t.Errorf("failed to encode contacts response: %v", err)
+		}
+	}))
+	t.Cleanup(contactsServer.Close)
+
+	poller := New(
+		account,
+		location,
+		signaladapter.New(account, contactsServer.URL, &http.Client{Timeout: time.Second}),
+		fixture.service,
+	)
+
+	cmd := scheduleCommand{
+		When:      time.Date(2026, time.July, 13, 12, 30, 0, 0, time.UTC),
+		Recipient: "Alice Smith",
+		Text:      "Hello there",
+	}
+
+	err = poller.handleScheduleCmd(t.Context(), cmd)
+	require.NoError(t, err)
+
+	messages, err := loadAllMessages(t, fixture.db)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+
+	created := messages[0]
+	require.Equal(t, cmd.When, created.ScheduledAt)
+	require.Equal(t, cmd.Recipient, created.Recipient)
+	require.Equal(t, "+380501112233", created.RecipientIdentifier)
+	require.Equal(t, cmd.Text, created.Text)
+
+	reply := messages[1]
+	require.Equal(t, account, reply.Recipient)
+	require.Equal(
+		t,
+		"Scheduled message "+strconv.FormatUint(created.ID, 10)+" for 2026-07-13 15:30 (Europe/Kyiv) to Alice Smith.",
+		reply.Text,
+	)
+}
+
 type testOutboxFixture struct {
 	db      *bolt.DB
 	service *outbox.Service

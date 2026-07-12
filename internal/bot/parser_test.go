@@ -16,7 +16,7 @@ func TestParser_Parse_Upcoming(t *testing.T) {
 
 	cmd, ok := parsed.(upcomingCommand)
 	require.True(t, ok)
-	require.Equal(t, "upcoming", cmd.Name())
+	require.Equal(t, upcomingCommand{}, cmd)
 }
 
 func TestParser_Parse_Cancel(t *testing.T) {
@@ -28,7 +28,6 @@ func TestParser_Parse_Cancel(t *testing.T) {
 	cmd, ok := parsed.(cancelCommand)
 	require.True(t, ok)
 	require.Equal(t, uint64(42), cmd.id)
-	require.Equal(t, "cancel", cmd.Name())
 }
 
 func TestParser_Parse_CancelAcceptsWhitespaceAfterVerb(t *testing.T) {
@@ -64,7 +63,6 @@ func TestParser_Parse_CancelRejectedWhenIDMissing(t *testing.T) {
 	parser := newTestParser(t)
 
 	_, err := parser.Parse("/cancel", time.Date(2026, time.July, 12, 9, 0, 0, 0, time.UTC))
-	require.Error(t, err)
 	require.ErrorIs(t, err, errbrick.ErrInvalidData)
 	require.ErrorContains(t, err, "cancel message id is empty")
 }
@@ -73,9 +71,10 @@ func TestParser_Parse_CancelRejectedWhenIDInvalid(t *testing.T) {
 	parser := newTestParser(t)
 
 	_, err := parser.Parse("/cancel abc", time.Date(2026, time.July, 12, 9, 0, 0, 0, time.UTC))
-	require.Error(t, err)
 	require.ErrorIs(t, err, errbrick.ErrInvalidData)
-	require.ErrorContains(t, err, "failed parse id")
+	require.ErrorContains(t, err, `invalid cancel message id "abc"`)
+	require.ErrorContains(t, err, "strconv.ParseUint")
+	require.ErrorContains(t, err, "invalid syntax")
 }
 
 func TestParser_Parse_ScheduleDateWithPhoneRecipient(t *testing.T) {
@@ -87,11 +86,8 @@ func TestParser_Parse_ScheduleDateWithPhoneRecipient(t *testing.T) {
 
 	cmd, ok := parsed.(scheduleCommand)
 	require.True(t, ok)
-	require.Equal(t, "schedule", cmd.Name())
 	require.Equal(t, "+380501112233", cmd.Recipient)
 	require.Equal(t, "Hello there", cmd.Text)
-	require.Equal(t, "Europe/Kyiv", cmd.Timezone)
-	require.Equal(t, "2026-07-13 15:30", cmd.OriginalLocalTime)
 	require.Equal(t, time.Date(2026, time.July, 13, 12, 30, 0, 0, time.UTC), cmd.When)
 }
 
@@ -104,7 +100,6 @@ func TestParser_Parse_ScheduleToday(t *testing.T) {
 
 	cmd, ok := parsed.(scheduleCommand)
 	require.True(t, ok)
-	require.Equal(t, "2026-07-12 15:45", cmd.OriginalLocalTime)
 	require.Equal(t, time.Date(2026, time.July, 12, 12, 45, 0, 0, time.UTC), cmd.When)
 }
 
@@ -117,7 +112,6 @@ func TestParser_Parse_ScheduleTomorrowUsesLocalDate(t *testing.T) {
 
 	cmd, ok := parsed.(scheduleCommand)
 	require.True(t, ok)
-	require.Equal(t, "2026-07-14 09:15", cmd.OriginalLocalTime)
 	require.Equal(t, time.Date(2026, time.July, 14, 6, 15, 0, 0, time.UTC), cmd.When)
 }
 
@@ -176,14 +170,13 @@ func TestParser_Parse_ScheduleAcceptsWhitespaceBetweenTokens(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "+380501112233", cmd.Recipient)
 	require.Equal(t, "Hello there", cmd.Text)
-	require.Equal(t, "2026-07-13 15:30", cmd.OriginalLocalTime)
+	require.Equal(t, time.Date(2026, time.July, 13, 12, 30, 0, 0, time.UTC), cmd.When)
 }
 
 func TestParser_Parse_ScheduleRejectedWhenScheduledInPast(t *testing.T) {
 	parser := newTestParser(t)
 
 	_, err := parser.Parse("/schedule today 11:59 +380501112233 Hello", time.Date(2026, time.July, 12, 9, 0, 0, 0, time.UTC))
-	require.Error(t, err)
 	require.ErrorIs(t, err, errbrick.ErrInvalidData)
 	require.ErrorContains(t, err, "scheduled time is in the past")
 }
@@ -192,18 +185,20 @@ func TestParser_Parse_ScheduleRejectedWhenDateInvalid(t *testing.T) {
 	parser := newTestParser(t)
 
 	_, err := parser.Parse("/schedule 2026-99-13 15:30 +380501112233 Hello", time.Date(2026, time.July, 12, 9, 0, 0, 0, time.UTC))
-	require.Error(t, err)
 	require.ErrorIs(t, err, errbrick.ErrInvalidData)
-	require.ErrorContains(t, err, "invalid date format")
+	require.ErrorContains(t, err, `invalid date format "2026-99-13"`)
+	require.ErrorContains(t, err, "parsing time")
+	require.ErrorContains(t, err, "month out of range")
 }
 
 func TestParser_Parse_ScheduleRejectedWhenTimeInvalid(t *testing.T) {
 	parser := newTestParser(t)
 
 	_, err := parser.Parse("/schedule 2026-07-13 25:30 +380501112233 Hello", time.Date(2026, time.July, 12, 9, 0, 0, 0, time.UTC))
-	require.Error(t, err)
 	require.ErrorIs(t, err, errbrick.ErrInvalidData)
-	require.ErrorContains(t, err, "invalid time format")
+	require.ErrorContains(t, err, `invalid time format "25:30"`)
+	require.ErrorContains(t, err, "parsing time")
+	require.ErrorContains(t, err, "hour out of range")
 }
 
 func TestParser_Parse_ScheduleRejectedWhenCommandIncomplete(t *testing.T) {
@@ -245,7 +240,6 @@ func TestParser_Parse_ScheduleRejectedWhenCommandIncomplete(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := parser.Parse(tc.input, now)
-			require.Error(t, err)
 			require.ErrorIs(t, err, errbrick.ErrInvalidData)
 			require.ErrorContains(t, err, tc.errContains)
 		})
@@ -286,7 +280,6 @@ func TestParser_Parse_ScheduleRejectedWhenQuotedRecipientInvalid(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := parser.Parse(tc.input, now)
-			require.Error(t, err)
 			require.ErrorIs(t, err, errbrick.ErrInvalidData)
 			require.ErrorContains(t, err, tc.errContains)
 		})
@@ -297,7 +290,6 @@ func TestParser_Parse_ListRejected(t *testing.T) {
 	parser := newTestParser(t)
 
 	_, err := parser.Parse("/list", time.Date(2026, time.July, 12, 9, 0, 0, 0, time.UTC))
-	require.Error(t, err)
 	require.ErrorIs(t, err, errbrick.ErrInvalidData)
 	require.ErrorContains(t, err, "unsupported command")
 }

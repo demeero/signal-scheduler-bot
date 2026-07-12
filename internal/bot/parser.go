@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/demeero/signal-scheduler-bot/internal/errbrick"
 )
@@ -63,7 +64,7 @@ func parseCancel(args string) (parsedCommand, error) {
 
 	id, err := strconv.ParseUint(idText, 10, 64)
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed parse id: %s", errbrick.ErrInvalidData, idText)
+		return nil, fmt.Errorf("%w: invalid cancel message id %q: %w", errbrick.ErrInvalidData, idText, err)
 	}
 
 	return cancelCommand{id: id}, nil
@@ -91,7 +92,7 @@ func (p *parser) parseSchedule(args string, now time.Time) (parsedCommand, error
 		return nil, fmt.Errorf("%w: schedule message body is empty", errbrick.ErrInvalidData)
 	}
 
-	when, localText, err := p.parseWhen(now, dateToken, timeToken)
+	when, err := p.parseWhen(now, dateToken, timeToken)
 	if err != nil {
 		return nil, err
 	}
@@ -101,18 +102,16 @@ func (p *parser) parseSchedule(args string, now time.Time) (parsedCommand, error
 	}
 
 	return scheduleCommand{
-		When:              when,
-		OriginalLocalTime: localText,
-		Timezone:          p.location.String(),
-		Recipient:         recipient,
-		Text:              message,
+		When:      when,
+		Recipient: recipient,
+		Text:      message,
 	}, nil
 }
 
-func (p *parser) parseWhen(now time.Time, dateToken, timeToken string) (time.Time, string, error) {
+func (p *parser) parseWhen(now time.Time, dateToken, timeToken string) (time.Time, error) {
 	clock, err := time.ParseInLocation("15:04", timeToken, p.location)
 	if err != nil {
-		return time.Time{}, "", fmt.Errorf("%w: invalid time format", errbrick.ErrInvalidData)
+		return time.Time{}, fmt.Errorf("%w: invalid time format %q: %w", errbrick.ErrInvalidData, timeToken, err)
 	}
 
 	baseNow := now.In(p.location)
@@ -127,7 +126,7 @@ func (p *parser) parseWhen(now time.Time, dateToken, timeToken string) (time.Tim
 	default:
 		localDate, err = time.ParseInLocation("2006-01-02", dateToken, p.location)
 		if err != nil {
-			return time.Time{}, "", fmt.Errorf("%w: invalid date format", errbrick.ErrInvalidData)
+			return time.Time{}, fmt.Errorf("%w: invalid date format %q: %w", errbrick.ErrInvalidData, dateToken, err)
 		}
 	}
 
@@ -142,7 +141,7 @@ func (p *parser) parseWhen(now time.Time, dateToken, timeToken string) (time.Tim
 		p.location,
 	)
 
-	return whenLocal.UTC(), whenLocal.Format("2006-01-02 15:04"), nil
+	return whenLocal.UTC(), nil
 }
 
 func cutField(text string) (string, string, error) {
@@ -166,8 +165,8 @@ func cutRecipient(text string) (string, string, error) {
 		return "", "", fmt.Errorf("%w: recipient is empty", errbrick.ErrInvalidData)
 	}
 
-	if open, close, ok := quotePair(text); ok {
-		return cutQuotedRecipient(text, open, close)
+	if open, closeQuote, ok := quotePair(text); ok {
+		return cutQuotedRecipient(text, open, closeQuote)
 	}
 
 	token, rest, err := cutFieldOrRemainder(text)
@@ -185,8 +184,8 @@ func cutQuotedRecipient(text, openQuote, closeQuote string) (string, string, err
 		return "", "", fmt.Errorf("%w: recipient is empty", errbrick.ErrInvalidData)
 	}
 
-	openRune := []rune(openQuote)[0]
-	closeRune := []rune(closeQuote)[0]
+	openRune, _ := utf8.DecodeRuneInString(openQuote)
+	closeRune, _ := utf8.DecodeRuneInString(closeQuote)
 	closingQuotes := supportedClosingQuotes()
 
 	for idx := 1; idx < len(quoted); idx++ {
