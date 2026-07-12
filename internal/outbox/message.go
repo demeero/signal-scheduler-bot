@@ -175,6 +175,17 @@ func (m Message) IsExpired(now time.Time, maxAge time.Duration) bool {
 	return now.UTC().Sub(m.ScheduledAt.UTC()) > maxAge
 }
 
+func (m Message) IsTerminal() bool {
+	switch m.Status {
+	case MessageStatusSent, MessageStatusFailed, MessageStatusCancelled:
+		return true
+	case MessageStatusPending, MessageStatusRetry:
+		return false
+	}
+
+	return false
+}
+
 func (m Message) MarkExpired(now time.Time, maxAge time.Duration) (Message, error) {
 	if m.Status != MessageStatusPending && m.Status != MessageStatusRetry {
 		return Message{}, fmt.Errorf("%w: outbox message %d status is %s", errbrick.ErrConflict, m.ID, m.Status)

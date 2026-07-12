@@ -31,14 +31,16 @@ type Service struct {
 	signalClient *signaladapter.SignalAdapter
 	maxAttempts  uint16
 	maxAge       time.Duration
+	vacuumAge    time.Duration
 }
 
-func New(maxAttempts uint16, maxAge time.Duration, db *bbolt.DB, signalClient *signaladapter.SignalAdapter) (*Service, error) {
+func New(maxAttempts uint16, maxAge, vacuumAge time.Duration, db *bbolt.DB, signalClient *signaladapter.SignalAdapter) (*Service, error) {
 	s := &Service{
 		db:           db,
 		signalClient: signalClient,
 		maxAttempts:  maxAttempts,
 		maxAge:       maxAge,
+		vacuumAge:    vacuumAge,
 	}
 
 	err := s.db.Update(func(tx *bbolt.Tx) error {
@@ -146,6 +148,24 @@ func (s *Service) SendDue(ctx context.Context) error {
 			return err
 		}
 	}
+
+	return nil
+}
+
+func (s *Service) Vacuum(ctx context.Context) error {
+	cutoff := time.Now().UTC().Add(-s.vacuumAge)
+	deleted, err := s.deleteOldTerminalMessages(ctx, cutoff)
+	if err != nil {
+		return fmt.Errorf("failed vacuum outbox messages: %w", err)
+	}
+	if deleted == 0 {
+		return nil
+	}
+
+	logbrick.FromCtx(ctx).Info("vacuumed outbox messages",
+		slog.Int("deleted", deleted),
+		slog.Time("cutoff", cutoff),
+		slog.Duration("retention", s.vacuumAge))
 
 	return nil
 }
@@ -262,6 +282,44 @@ func (s *Service) loadDueMessages(now time.Time) ([]Message, error) {
 
 	sortMessages(messages)
 	return messages, nil
+}
+
+func (s *Service) deleteOldTerminalMessages(ctx context.Context, cutoff time.Time) (int, error) {
+	var deleted int
+
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		bucket, err := messagesBucket(tx)
+		if err != nil {
+			return err
+		}
+
+		cursor := bucket.Cursor()
+		for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+
+			msg, err := decodeMessage(value)
+			if err != nil {
+				return err
+			}
+			if !shouldVacuumMessage(msg, cutoff) {
+				continue
+			}
+
+			if err := cursor.Delete(); err != nil {
+				return fmt.Errorf("failed delete outbox message %d: %w", msg.ID, err)
+			}
+			deleted++
+		}
+
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	return deleted, nil
 }
 
 func (s *Service) failExpiredMessage(id uint64, now time.Time) (Message, error) {
@@ -462,6 +520,14 @@ func storeMessage(bucket *bbolt.Bucket, msg Message) error {
 	}
 
 	return nil
+}
+
+func shouldVacuumMessage(msg Message, cutoff time.Time) bool {
+	if !msg.IsTerminal() {
+		return false
+	}
+
+	return !msg.UpdatedAt.UTC().After(cutoff.UTC())
 }
 
 func sortMessages(messages []Message) {

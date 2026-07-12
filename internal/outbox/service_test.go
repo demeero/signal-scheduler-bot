@@ -452,7 +452,7 @@ func TestService_SendDue_RollsBackAttemptOnContextCancel(t *testing.T) {
 		}),
 	}
 	client := signaladapter.New("+380500000000", "http://signal.test", httpClient)
-	service, err := New(5, 15*time.Minute, db, client)
+	service, err := New(5, 15*time.Minute, 30*24*time.Hour, db, client)
 	require.NoError(t, err)
 
 	created, err := service.CreateMessage(t.Context(), CreateMessageParams{
@@ -478,6 +478,113 @@ func TestService_SendDue_RollsBackAttemptOnContextCancel(t *testing.T) {
 	stored, err := loadMessageByID(t, db, created.ID)
 	require.NoError(t, err)
 	require.Equal(t, created, stored)
+}
+
+func TestService_Vacuum_DeletesOnlyOldTerminalMessages(t *testing.T) {
+	fixture := newServiceFixtureWithConfig(t, 15*time.Minute, 30*24*time.Hour)
+
+	oldSent, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
+		ScheduledAt:         time.Now().UTC().Add(-48 * time.Hour),
+		Recipient:           "Sent",
+		RecipientIdentifier: "sent-id",
+		Text:                "sent text",
+	})
+	require.NoError(t, err)
+
+	oldFailed, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
+		ScheduledAt:         time.Now().UTC().Add(-48 * time.Hour),
+		Recipient:           "Failed",
+		RecipientIdentifier: "failed-id",
+		Text:                "failed text",
+	})
+	require.NoError(t, err)
+
+	oldCancelled, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
+		ScheduledAt:         time.Now().UTC().Add(48 * time.Hour),
+		Recipient:           "Cancelled",
+		RecipientIdentifier: "cancelled-id",
+		Text:                "cancelled text",
+	})
+	require.NoError(t, err)
+
+	recentSent, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
+		ScheduledAt:         time.Now().UTC().Add(-time.Hour),
+		Recipient:           "Recent sent",
+		RecipientIdentifier: "recent-sent-id",
+		Text:                "recent sent text",
+	})
+	require.NoError(t, err)
+
+	oldPending, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
+		ScheduledAt:         time.Now().UTC().Add(-48 * time.Hour),
+		Recipient:           "Pending",
+		RecipientIdentifier: "pending-id",
+		Text:                "pending text",
+	})
+	require.NoError(t, err)
+
+	oldRetry, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
+		ScheduledAt:         time.Now().UTC().Add(-48 * time.Hour),
+		Recipient:           "Retry",
+		RecipientIdentifier: "retry-id",
+		Text:                "retry text",
+	})
+	require.NoError(t, err)
+
+	cutoff := time.Now().UTC().Add(-31 * 24 * time.Hour)
+	err = updateStoredMessage(t, fixture.db, oldSent.ID, func(msg Message) Message {
+		msg.Status = MessageStatusSent
+		msg.Attempt = 1
+		msg.UpdatedAt = cutoff.Add(-time.Hour)
+		return msg
+	})
+	require.NoError(t, err)
+	err = updateStoredMessage(t, fixture.db, oldFailed.ID, func(msg Message) Message {
+		msg.Status = MessageStatusFailed
+		msg.Attempt = msg.MaxAttempts
+		msg.LastError = "boom"
+		msg.UpdatedAt = cutoff.Add(-2 * time.Hour)
+		return msg
+	})
+	require.NoError(t, err)
+	err = updateStoredMessage(t, fixture.db, oldCancelled.ID, func(msg Message) Message {
+		msg.Status = MessageStatusCancelled
+		msg.UpdatedAt = cutoff.Add(-3 * time.Hour)
+		return msg
+	})
+	require.NoError(t, err)
+	err = updateStoredMessage(t, fixture.db, recentSent.ID, func(msg Message) Message {
+		msg.Status = MessageStatusSent
+		msg.Attempt = 1
+		msg.UpdatedAt = cutoff.Add(7 * 24 * time.Hour)
+		return msg
+	})
+	require.NoError(t, err)
+	err = updateStoredMessage(t, fixture.db, oldRetry.ID, func(msg Message) Message {
+		msg.Status = MessageStatusRetry
+		msg.Attempt = 1
+		msg.LastError = "temporary"
+		msg.UpdatedAt = cutoff.Add(-4 * time.Hour)
+		return msg
+	})
+	require.NoError(t, err)
+
+	err = fixture.service.Vacuum(t.Context())
+	require.NoError(t, err)
+
+	_, err = loadMessageByID(t, fixture.db, oldSent.ID)
+	require.ErrorIs(t, err, errbrick.ErrNotFound)
+	_, err = loadMessageByID(t, fixture.db, oldFailed.ID)
+	require.ErrorIs(t, err, errbrick.ErrNotFound)
+	_, err = loadMessageByID(t, fixture.db, oldCancelled.ID)
+	require.ErrorIs(t, err, errbrick.ErrNotFound)
+
+	_, err = loadMessageByID(t, fixture.db, recentSent.ID)
+	require.NoError(t, err)
+	_, err = loadMessageByID(t, fixture.db, oldPending.ID)
+	require.NoError(t, err)
+	_, err = loadMessageByID(t, fixture.db, oldRetry.ID)
+	require.NoError(t, err)
 }
 
 type serviceFixture struct {
@@ -509,10 +616,16 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 func newServiceFixture(t *testing.T, responses ...testSendResponse) *serviceFixture {
 	t.Helper()
 
-	return newServiceFixtureWithMaxAge(t, 15*time.Minute, responses...)
+	return newServiceFixtureWithConfig(t, 15*time.Minute, 30*24*time.Hour, responses...)
 }
 
 func newServiceFixtureWithMaxAge(t *testing.T, maxAge time.Duration, responses ...testSendResponse) *serviceFixture {
+	t.Helper()
+
+	return newServiceFixtureWithConfig(t, maxAge, 30*24*time.Hour, responses...)
+}
+
+func newServiceFixtureWithConfig(t *testing.T, maxAge, vacuumAge time.Duration, responses ...testSendResponse) *serviceFixture {
 	t.Helper()
 
 	db, err := bolt.Open(filepath.Join(t.TempDir(), "test.db"), 0o600, &bolt.Options{Timeout: time.Second})
@@ -569,7 +682,7 @@ func newServiceFixtureWithMaxAge(t *testing.T, maxAge time.Duration, responses .
 	t.Cleanup(fixture.server.Close)
 
 	client := signaladapter.New("+380500000000", fixture.server.URL, &http.Client{Timeout: time.Second})
-	fixture.service, err = New(5, maxAge, db, client)
+	fixture.service, err = New(5, maxAge, vacuumAge, db, client)
 	require.NoError(t, err)
 
 	return fixture

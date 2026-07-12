@@ -54,10 +54,14 @@ type Bot struct {
 type Outbox struct {
 	// WorkerInterval controls how often due scheduled messages are scanned.
 	WorkerInterval time.Duration `default:"1s" json:"worker_interval" split_words:"true"`
+	// VacuumInterval controls how often old terminal messages are deleted.
+	VacuumInterval time.Duration `default:"1h" json:"vacuum_interval" split_words:"true"`
 	// MaxAttempts is the maximum number of send attempts.
 	MaxAttempts uint16 `default:"5" json:"max_attempts" split_words:"true"`
 	// MaxAge controls how late a due message may be before it is discarded.
 	MaxAge time.Duration `default:"15m" json:"max_age" split_words:"true"`
+	// VacuumRetention controls how long terminal messages are kept before deletion.
+	VacuumRetention time.Duration `default:"720h" json:"vacuum_retention" split_words:"true"`
 }
 
 var (
