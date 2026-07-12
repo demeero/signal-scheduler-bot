@@ -48,16 +48,17 @@ func run(ctx context.Context, cfg config.Config) error {
 	}
 	defer closeBoltDB(db)
 
-	outboundSvc, err := outbound.New(db)
+	signalAdapter := newSignalAdapter(cfg)
+
+	outboundSvc, err := outbound.New(cfg.Retry.MaxAttempts, db, signalAdapter)
 	if err != nil {
 		return fmt.Errorf("init outbound adapter: %w", err)
 	}
 
-	signalAdapter := newSignalAdapter(cfg)
-
 	botPoller := bot.New(cfg.Signal.Account, location, signalAdapter, outboundSvc)
 
 	go func() {
+		slog.Info("started inbound polling worker", "interval", cfg.Scheduler.PollInterval)
 		for {
 			if err := botPoller.Poll(ctx); err != nil {
 				slog.Error("failed poll", "err", err)
@@ -68,6 +69,22 @@ func run(ctx context.Context, cfg config.Config) error {
 				slog.Info("ctx done received - finish inbound polling")
 				return
 			case <-time.After(cfg.Scheduler.PollInterval):
+			}
+		}
+	}()
+
+	go func() {
+		slog.Info("started outbound send worker", "interval", cfg.Scheduler.WorkerInterval)
+		for {
+			if err := outboundSvc.SendDue(ctx); err != nil {
+				slog.Error("failed send due outbound messages", "err", err)
+			}
+
+			select {
+			case <-ctx.Done():
+				slog.Info("ctx done received - finish outbound sending")
+				return
+			case <-time.After(cfg.Scheduler.WorkerInterval):
 			}
 		}
 	}()

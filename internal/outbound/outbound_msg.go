@@ -1,6 +1,7 @@
 package outbound
 
 import (
+	"encoding/binary"
 	"fmt"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ type MessageStatus string
 
 const (
 	MessageStatusPending   MessageStatus = "pending"
+	MessageStatusRetry     MessageStatus = "retry"
 	MessageStatusSent      MessageStatus = "sent"
 	MessageStatusFailed    MessageStatus = "failed"
 	MessageStatusCancelled MessageStatus = "cancelled"
@@ -24,13 +26,19 @@ type Message struct {
 	RecipientIdentifier string        `json:"recipient_identifier"`
 	Recipient           string        `json:"recipient"`
 	Text                string        `json:"text"`
+	LastError           string        `json:"last_error"`
 	Status              MessageStatus `json:"status"`
+	Attempt             uint16        `json:"attempt"`
+	MaxAttempts         uint16        `json:"max_attempts"`
 	ID                  uint64        `json:"id"`
 }
 
-func newMessage(id uint64, scheduledAt time.Time, recipient, recipientIdentifier, text string) (Message, error) {
+func newMessage(id uint64, scheduledAt time.Time, recipient, recipientIdentifier, text string, maxAttempts uint16) (Message, error) {
 	if scheduledAt.IsZero() {
 		return Message{}, fmt.Errorf("%w: scheduledAt empty", errbrick.ErrInvalidData)
+	}
+	if maxAttempts == 0 {
+		return Message{}, fmt.Errorf("%w: maxAttempts empty", errbrick.ErrInvalidData)
 	}
 	recipient = strings.TrimSpace(recipient)
 	if recipient == "" {
@@ -56,6 +64,7 @@ func newMessage(id uint64, scheduledAt time.Time, recipient, recipientIdentifier
 		RecipientIdentifier: recipientIdentifier,
 		Text:                text,
 		Status:              MessageStatusPending,
+		MaxAttempts:         maxAttempts,
 	}, nil
 }
 
@@ -72,6 +81,99 @@ func (m Message) Cancel() (Message, error) {
 	return m, nil
 }
 
+func (m Message) StartSendAttempt() (Message, error) {
+	if m.Status != MessageStatusPending && m.Status != MessageStatusRetry {
+		return Message{}, fmt.Errorf("%w: outbound message %d status is %s", errbrick.ErrConflict, m.ID, m.Status)
+	}
+	if m.Attempt >= m.MaxAttempts {
+		return Message{}, fmt.Errorf("%w: outbound message %d reached max attempts", errbrick.ErrConflict, m.ID)
+	}
+
+	m.Attempt++
+	m.UpdatedAt = time.Now().UTC()
+	return m, nil
+}
+
+func (m Message) MarkSent() (Message, error) {
+	if m.Status != MessageStatusPending && m.Status != MessageStatusRetry {
+		return Message{}, fmt.Errorf("%w: outbound message %d status is %s", errbrick.ErrConflict, m.ID, m.Status)
+	}
+	if m.Attempt == 0 {
+		return Message{}, fmt.Errorf("%w: outbound message %d has no send attempts", errbrick.ErrConflict, m.ID)
+	}
+	if m.Attempt > m.MaxAttempts {
+		return Message{}, fmt.Errorf("%w: outbound message %d exceeded max attempts", errbrick.ErrConflict, m.ID)
+	}
+
+	m.Status = MessageStatusSent
+	m.LastError = ""
+	m.UpdatedAt = time.Now().UTC()
+	return m, nil
+}
+
+func (m Message) MarkRetry(lastErr string) (Message, error) {
+	if m.Status != MessageStatusPending && m.Status != MessageStatusRetry {
+		return Message{}, fmt.Errorf("%w: outbound message %d status is %s", errbrick.ErrConflict, m.ID, m.Status)
+	}
+	if m.Attempt == 0 {
+		return Message{}, fmt.Errorf("%w: outbound message %d has no send attempts", errbrick.ErrConflict, m.ID)
+	}
+	if m.Attempt >= m.MaxAttempts {
+		return Message{}, fmt.Errorf("%w: outbound message %d reached max attempts", errbrick.ErrConflict, m.ID)
+	}
+
+	lastErr = strings.TrimSpace(lastErr)
+	if lastErr == "" {
+		return Message{}, fmt.Errorf("%w: outbound message %d last error empty", errbrick.ErrInvalidData, m.ID)
+	}
+
+	m.Status = MessageStatusRetry
+	m.LastError = lastErr
+	m.UpdatedAt = time.Now().UTC()
+	return m, nil
+}
+
+func (m Message) MarkFailed(lastErr string) (Message, error) {
+	if m.Status != MessageStatusPending && m.Status != MessageStatusRetry {
+		return Message{}, fmt.Errorf("%w: outbound message %d status is %s", errbrick.ErrConflict, m.ID, m.Status)
+	}
+	if m.Attempt == 0 {
+		return Message{}, fmt.Errorf("%w: outbound message %d has no send attempts", errbrick.ErrConflict, m.ID)
+	}
+	if m.Attempt < m.MaxAttempts {
+		return Message{}, fmt.Errorf("%w: outbound message %d can still retry", errbrick.ErrConflict, m.ID)
+	}
+
+	lastErr = strings.TrimSpace(lastErr)
+	if lastErr == "" {
+		return Message{}, fmt.Errorf("%w: outbound message %d last error empty", errbrick.ErrInvalidData, m.ID)
+	}
+
+	m.Status = MessageStatusFailed
+	m.LastError = lastErr
+	m.UpdatedAt = time.Now().UTC()
+	return m, nil
+}
+
 func (m Message) IsUpcoming() bool {
 	return m.Status == MessageStatusPending && m.ScheduledAt.UTC().After(time.Now().UTC())
+}
+
+func (m Message) IsDue(now time.Time) bool {
+	if m.Status != MessageStatusPending && m.Status != MessageStatusRetry {
+		return false
+	}
+
+	return !m.ScheduledAt.UTC().After(now.UTC())
+}
+
+func (m Message) key() []byte {
+	return outboundMessageKey(m.ID)
+}
+
+func outboundMessageKey(id uint64) []byte {
+	key := make([]byte, 8)
+	binary.BigEndian.PutUint64(key, id)
+
+	return key
 }

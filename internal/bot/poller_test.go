@@ -3,6 +3,8 @@ package bot
 import (
 	"encoding/binary"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/demeero/signal-scheduler-bot/internal/errbrick"
 	"github.com/demeero/signal-scheduler-bot/internal/outbound"
+	"github.com/demeero/signal-scheduler-bot/internal/signaladapter"
 	"github.com/stretchr/testify/require"
 	bolt "go.etcd.io/bbolt"
 )
@@ -171,7 +174,7 @@ func TestPollerHandleCancelCmdReturnsNotFound(t *testing.T) {
 	err = poller.handleCancelCmd(t.Context(), cancelCommand{id: 42})
 	require.Error(t, err)
 	require.ErrorIs(t, err, errbrick.ErrNotFound)
-	require.EqualError(t, err, "message 42 not found")
+	require.ErrorContains(t, err, "failed cancel outbound message")
 }
 
 func TestPollerHandleCancelCmdReturnsConflict(t *testing.T) {
@@ -192,7 +195,7 @@ func TestPollerHandleCancelCmdReturnsConflict(t *testing.T) {
 	err = poller.handleCancelCmd(t.Context(), cancelCommand{id: created.ID})
 	require.Error(t, err)
 	require.ErrorIs(t, err, errbrick.ErrConflict)
-	require.EqualError(t, err, "message "+strconv.FormatUint(created.ID, 10)+" cannot be cancelled")
+	require.ErrorContains(t, err, "failed cancel outbound message")
 }
 
 type testOutboundFixture struct {
@@ -209,7 +212,24 @@ func newTestOutboundFixture(t *testing.T) testOutboundFixture {
 		require.NoError(t, db.Close())
 	})
 
-	service, err := outbound.New(db)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("unexpected method: got %s want %s", r.Method, http.MethodPost)
+			http.Error(w, "unexpected method", http.StatusMethodNotAllowed)
+			return
+		}
+		if r.URL.Path != "/v2/send" {
+			t.Errorf("unexpected path: got %s want %s", r.URL.Path, "/v2/send")
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+	}))
+	t.Cleanup(server.Close)
+
+	signalClient := signaladapter.New("+380999999999", server.URL, &http.Client{Timeout: time.Second})
+
+	service, err := outbound.New(5, db, signalClient)
 	require.NoError(t, err)
 
 	return testOutboundFixture{

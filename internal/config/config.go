@@ -60,7 +60,7 @@ type Scheduler struct {
 
 type Retry struct {
 	// MaxAttempts is the maximum number of send attempts.
-	MaxAttempts int `default:"3" json:"max_attempts" split_words:"true"`
+	MaxAttempts uint16 `default:"5" json:"max_attempts" split_words:"true"`
 	// Window is the total retry window for a scheduled message.
 	Window time.Duration `default:"3m" json:"window"`
 }
