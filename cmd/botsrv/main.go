@@ -15,8 +15,8 @@ import (
 
 	_ "time/tzdata"
 
+	"github.com/demeero/signal-scheduler-bot/internal/bot"
 	"github.com/demeero/signal-scheduler-bot/internal/config"
-	"github.com/demeero/signal-scheduler-bot/internal/inbound"
 	"github.com/demeero/signal-scheduler-bot/internal/logbrick"
 	"github.com/demeero/signal-scheduler-bot/internal/outbound"
 	"github.com/demeero/signal-scheduler-bot/internal/signaladapter"
@@ -55,11 +55,11 @@ func run(ctx context.Context, cfg config.Config) error {
 
 	signalAdapter := newSignalAdapter(cfg)
 
-	inboundPoller := inbound.New(cfg.Signal.Account, location, signalAdapter, outboundSvc)
+	botPoller := bot.New(cfg.Signal.Account, location, signalAdapter, outboundSvc)
 
 	go func() {
 		for {
-			if err := inboundPoller.Poll(ctx); err != nil {
+			if err := botPoller.Poll(ctx); err != nil {
 				slog.Error("failed poll", "err", err)
 			}
 

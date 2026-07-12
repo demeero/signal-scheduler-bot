@@ -1,4 +1,4 @@
-package inbound
+package bot
 
 import (
 	"encoding/binary"
