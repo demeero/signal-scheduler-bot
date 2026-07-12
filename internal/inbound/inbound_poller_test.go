@@ -1,6 +1,7 @@
 package inbound
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"path/filepath"
 	"strconv"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/demeero/signal-scheduler-bot/internal/errbrick"
 	"github.com/demeero/signal-scheduler-bot/internal/outbound"
 	"github.com/stretchr/testify/require"
 	bolt "go.etcd.io/bbolt"
@@ -128,6 +130,71 @@ func TestPollerHandleUpcomingCmdHidesOverduePendingMessages(t *testing.T) {
 	require.Equal(t, "Upcoming messages: 0", reply.Text)
 }
 
+func TestPollerHandleCancelCmd(t *testing.T) {
+	location, err := time.LoadLocation("Europe/Kyiv")
+	require.NoError(t, err)
+
+	fixture := newTestOutboundFixture(t)
+	created, err := fixture.service.CreateMessage(t.Context(), outbound.CreateOutboundMessageParams{
+		ScheduledAt:         time.Now().UTC().Add(time.Hour),
+		Recipient:           "Future",
+		RecipientIdentifier: "future-id",
+		Text:                "future text",
+	})
+	require.NoError(t, err)
+
+	poller := New("+380999999999", location, nil, fixture.service)
+
+	err = poller.handleCancelCmd(t.Context(), cancelCommand{id: created.ID})
+	require.NoError(t, err)
+
+	stored, err := loadStoredMessageByID(t, fixture.db, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, outbound.MessageStatusCancelled, stored.Status)
+
+	messages, err := loadAllMessages(t, fixture.db)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+
+	reply := messages[len(messages)-1]
+	require.Equal(t, "Cancelled message "+strconv.FormatUint(created.ID, 10)+".", reply.Text)
+	require.Equal(t, "+380999999999", reply.Recipient)
+}
+
+func TestPollerHandleCancelCmdReturnsNotFound(t *testing.T) {
+	location, err := time.LoadLocation("Europe/Kyiv")
+	require.NoError(t, err)
+
+	fixture := newTestOutboundFixture(t)
+	poller := New("+380999999999", location, nil, fixture.service)
+
+	err = poller.handleCancelCmd(t.Context(), cancelCommand{id: 42})
+	require.Error(t, err)
+	require.ErrorIs(t, err, errbrick.ErrNotFound)
+	require.EqualError(t, err, "message 42 not found")
+}
+
+func TestPollerHandleCancelCmdReturnsConflict(t *testing.T) {
+	location, err := time.LoadLocation("Europe/Kyiv")
+	require.NoError(t, err)
+
+	fixture := newTestOutboundFixture(t)
+	created, err := fixture.service.CreateMessage(t.Context(), outbound.CreateOutboundMessageParams{
+		ScheduledAt:         time.Now().UTC().Add(-time.Minute),
+		Recipient:           "Past",
+		RecipientIdentifier: "past-id",
+		Text:                "past text",
+	})
+	require.NoError(t, err)
+
+	poller := New("+380999999999", location, nil, fixture.service)
+
+	err = poller.handleCancelCmd(t.Context(), cancelCommand{id: created.ID})
+	require.Error(t, err)
+	require.ErrorIs(t, err, errbrick.ErrConflict)
+	require.EqualError(t, err, "message "+strconv.FormatUint(created.ID, 10)+" cannot be cancelled")
+}
+
 type testOutboundFixture struct {
 	db      *bolt.DB
 	service *outbound.Service
@@ -180,4 +247,26 @@ func loadAllMessages(t *testing.T, db *bolt.DB) ([]outbound.Message, error) {
 	})
 
 	return messages, err
+}
+
+func loadStoredMessageByID(t *testing.T, db *bolt.DB, id uint64) (outbound.Message, error) {
+	t.Helper()
+
+	var msg outbound.Message
+	err := db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("outbound_messages"))
+		require.NotNil(t, bucket)
+
+		key := make([]byte, 8)
+		binary.BigEndian.PutUint64(key, id)
+
+		value := bucket.Get(key)
+		if value == nil {
+			return errbrick.ErrNotFound
+		}
+
+		return json.Unmarshal(value, &msg)
+	})
+
+	return msg, err
 }

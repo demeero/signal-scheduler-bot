@@ -111,8 +111,12 @@ func (p *Poller) handleUpcomingCmd(ctx context.Context) error {
 }
 
 func (p *Poller) handleCancelCmd(ctx context.Context, cmd cancelCommand) error {
-	_ = cmd
-	return p.queueSelfOutboundMessage(ctx, "Command /cancel is not implemented yet.")
+	_, err := p.outboundSvc.CancelMessage(ctx, cmd.id)
+	if err != nil {
+		return fmt.Errorf("failed cancel outbound message: %w", err)
+	}
+
+	return p.queueSelfOutboundMessage(ctx, fmt.Sprintf("Cancelled message %d.", cmd.id))
 }
 
 func (p *Poller) handleScheduleCmd(ctx context.Context, cmd scheduleCommand) error {

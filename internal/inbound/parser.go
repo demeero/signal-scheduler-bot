@@ -10,6 +10,7 @@ import (
 )
 
 const (
+	commandCancel         = "/cancel"
 	commandHelp           = "/help"
 	commandUpcoming       = "/upcoming"
 	commandCancelPrefix   = "/cancel "
@@ -34,7 +35,7 @@ func (p *parser) Parse(raw string, now time.Time) (parsedCommand, error) {
 		return helpCommand{}, nil
 	case text == commandUpcoming:
 		return upcomingCommand{}, nil
-	case strings.HasPrefix(text, commandCancelPrefix):
+	case text == commandCancel || strings.HasPrefix(text, commandCancelPrefix):
 		return parseCancel(text)
 	case strings.HasPrefix(text, commandSchedulePrefix):
 		return p.parseSchedule(text, now)
@@ -44,7 +45,7 @@ func (p *parser) Parse(raw string, now time.Time) (parsedCommand, error) {
 }
 
 func parseCancel(text string) (parsedCommand, error) {
-	idText := strings.TrimSpace(strings.TrimPrefix(text, commandCancelPrefix))
+	idText := strings.TrimSpace(strings.TrimPrefix(text, commandCancel))
 	if idText == "" {
 		return nil, fmt.Errorf("%w: cancel message id is empty", errbrick.ErrInvalidData)
 	}

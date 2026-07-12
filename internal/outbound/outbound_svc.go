@@ -9,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/demeero/signal-scheduler-bot/internal/errbrick"
 	"go.etcd.io/bbolt"
 )
 
@@ -94,7 +95,7 @@ func (s *Service) LoadUpcomingMessages(_ context.Context) ([]Message, error) {
 				return fmt.Errorf("failed decode outbound message: %w", err)
 			}
 
-			if msg.ScheduledAt.UTC().After(time.Now().UTC()) {
+			if msg.IsUpcoming() {
 				messages = append(messages, msg)
 			}
 
@@ -121,6 +122,49 @@ func (s *Service) LoadUpcomingMessages(_ context.Context) ([]Message, error) {
 	})
 
 	return messages, nil
+}
+
+func (s *Service) CancelMessage(_ context.Context, id uint64) (Message, error) {
+	var cancelled Message
+
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(outboundMessagesBucket)
+		if bucket == nil {
+			return errors.New("outbound messages bucket does not exist")
+		}
+
+		raw := bucket.Get(outboundMessageKey(id))
+		if raw == nil {
+			return fmt.Errorf("%w: outbound message %d", errbrick.ErrNotFound, id)
+		}
+
+		var msg Message
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			return fmt.Errorf("failed decode outbound message: %w", err)
+		}
+
+		canceledMsg, err := msg.Cancel()
+		if err != nil {
+			return err
+		}
+		cancelled = canceledMsg
+
+		data, err := json.Marshal(cancelled)
+		if err != nil {
+			return fmt.Errorf("failed encode outbound message: %w", err)
+		}
+
+		if err := bucket.Put(outboundMessageKey(id), data); err != nil {
+			return fmt.Errorf("failed store outbound message: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return Message{}, fmt.Errorf("failed cancel outbound message: %w", err)
+	}
+
+	return cancelled, nil
 }
 
 func outboundMessageKey(id uint64) []byte {

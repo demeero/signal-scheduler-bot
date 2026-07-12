@@ -58,3 +58,20 @@ func newMessage(id uint64, scheduledAt time.Time, recipient, recipientIdentifier
 		Status:              MessageStatusPending,
 	}, nil
 }
+
+func (m Message) Cancel() (Message, error) {
+	if m.Status != MessageStatusPending {
+		return Message{}, fmt.Errorf("%w: outbound message %d status is %s", errbrick.ErrConflict, m.ID, m.Status)
+	}
+	if !m.ScheduledAt.UTC().After(time.Now().UTC()) {
+		return Message{}, fmt.Errorf("%w: outbound message %d is already due", errbrick.ErrConflict, m.ID)
+	}
+
+	m.Status = MessageStatusCancelled
+	m.UpdatedAt = time.Now().UTC()
+	return m, nil
+}
+
+func (m Message) IsUpcoming() bool {
+	return m.Status == MessageStatusPending && m.ScheduledAt.UTC().After(time.Now().UTC())
+}
