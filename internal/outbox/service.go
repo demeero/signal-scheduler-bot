@@ -142,81 +142,94 @@ func (s *Service) SendDue(ctx context.Context) error {
 
 	logger := logbrick.FromCtx(ctx)
 	for _, msg := range messages {
-		if err := ctx.Err(); err != nil {
+		if err := s.sendDueMessage(ctx, logger, now, msg); err != nil {
 			return err
 		}
-
-		if msg.IsExpired(now, s.maxAge) {
-			expired, err := s.failExpiredMessage(msg.ID, now)
-			if err != nil {
-				return fmt.Errorf("failed mark expired outbox message %d: %w", msg.ID, err)
-			}
-
-			if err := s.notifyPermanentFailure(ctx, expired); err != nil {
-				logger.Error("failed notify outbox permanent failure",
-					slog.Uint64("msg_id", expired.ID),
-					slog.String("recipient", expired.Recipient),
-					slog.String("err", err.Error()))
-			}
-
-			logger.Error("outbox message expired before send",
-				slog.Uint64("msg_id", expired.ID),
-				slog.String("recipient", expired.Recipient),
-				slog.Time("scheduled_at", expired.ScheduledAt),
-				slog.Duration("max_age", s.maxAge))
-			continue
-		}
-
-		attempted, err := s.startSendAttempt(msg.ID)
-		if err != nil {
-			return fmt.Errorf("failed start send attempt for outbox message %d: %w", msg.ID, err)
-		}
-
-		sendErr := s.signalClient.SendMessage(ctx, attempted.RecipientIdentifier, attempted.Text)
-		if sendErr == nil {
-			sent, err := s.finishSendSuccess(attempted.ID)
-			if err != nil {
-				return fmt.Errorf("failed mark outbox message %d as sent: %w", attempted.ID, err)
-			}
-
-			logger.Info("outbox message sent",
-				slog.Uint64("msg_id", sent.ID),
-				slog.Uint64("attempt", uint64(sent.Attempt)),
-				slog.String("recipient", sent.Recipient))
-			continue
-		}
-
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			if err := s.rollbackSendAttempt(msg); err != nil {
-				return fmt.Errorf("failed rollback send attempt for outbox message %d: %w", msg.ID, err)
-			}
-
-			return ctxErr
-		}
-
-		finalized, err := s.finishSendFailure(attempted.ID, sendErr.Error())
-		if err != nil {
-			return fmt.Errorf("failed finalize outbox message %d send error: %w", attempted.ID, err)
-		}
-
-		logMsg := "outbox message send retry scheduled"
-		if finalized.Status == MessageStatusFailed {
-			logMsg = "outbox message send failed permanently"
-
-			if err := s.notifyPermanentFailure(ctx, finalized); err != nil {
-				logger.Error("failed notify outbox permanent failure",
-					slog.Uint64("msg_id", finalized.ID),
-					slog.String("recipient", finalized.Recipient),
-					slog.String("err", err.Error()))
-			}
-		}
-		logger.Error(logMsg,
-			slog.Uint64("msg_id", finalized.ID),
-			slog.Uint64("attempt", uint64(finalized.Attempt)),
-			slog.Uint64("max_attempts", uint64(finalized.MaxAttempts)),
-			slog.String("recipient", finalized.Recipient),
-			slog.String("last_error", finalized.LastError))
 	}
+
+	return nil
+}
+
+func (s *Service) sendDueMessage(ctx context.Context, logger *slog.Logger, now time.Time, msg Message) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	if msg.IsExpired(now, s.maxAge) {
+		return s.handleExpiredDueMessage(ctx, logger, now, msg)
+	}
+
+	return s.sendActiveDueMessage(ctx, logger, msg)
+}
+
+func (s *Service) handleExpiredDueMessage(ctx context.Context, logger *slog.Logger, now time.Time, msg Message) error {
+	expired, err := s.failExpiredMessage(msg.ID, now)
+	if err != nil {
+		return fmt.Errorf("failed mark expired outbox message %d: %w", msg.ID, err)
+	}
+
+	if err := s.notifyPermanentFailure(ctx, expired); err != nil {
+		s.logPermanentFailureNotifyError(logger, expired, err)
+	}
+
+	logger.Error("outbox message expired before send",
+		slog.Uint64("msg_id", expired.ID),
+		slog.String("recipient", expired.Recipient),
+		slog.Time("scheduled_at", expired.ScheduledAt),
+		slog.Duration("max_age", s.maxAge))
+
+	return nil
+}
+
+func (s *Service) sendActiveDueMessage(ctx context.Context, logger *slog.Logger, msg Message) error {
+	attempted, err := s.startSendAttempt(msg.ID)
+	if err != nil {
+		return fmt.Errorf("failed start send attempt for outbox message %d: %w", msg.ID, err)
+	}
+
+	sendErr := s.signalClient.SendMessage(ctx, attempted.RecipientIdentifier, attempted.Text)
+	if sendErr == nil {
+		return s.handleSentDueMessage(logger, attempted)
+	}
+
+	return s.handleFailedDueMessage(ctx, logger, msg, attempted, sendErr)
+}
+
+func (s *Service) handleSentDueMessage(logger *slog.Logger, attempted Message) error {
+	sent, err := s.finishSendSuccess(attempted.ID)
+	if err != nil {
+		return fmt.Errorf("failed mark outbox message %d as sent: %w", attempted.ID, err)
+	}
+
+	logger.Info("outbox message sent",
+		slog.Uint64("msg_id", sent.ID),
+		slog.Uint64("attempt", uint64(sent.Attempt)),
+		slog.String("recipient", sent.Recipient))
+
+	return nil
+}
+
+func (s *Service) handleFailedDueMessage(ctx context.Context, logger *slog.Logger, previous, attempted Message, sendErr error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		if err := s.rollbackSendAttempt(previous); err != nil {
+			return fmt.Errorf("failed rollback send attempt for outbox message %d: %w", previous.ID, err)
+		}
+
+		return ctxErr
+	}
+
+	finalized, err := s.finishSendFailure(attempted.ID, sendErr.Error())
+	if err != nil {
+		return fmt.Errorf("failed finalize outbox message %d send error: %w", attempted.ID, err)
+	}
+
+	if finalized.Status == MessageStatusFailed {
+		if err := s.notifyPermanentFailure(ctx, finalized); err != nil {
+			s.logPermanentFailureNotifyError(logger, finalized, err)
+		}
+	}
+
+	s.logSendFailureResult(logger, finalized)
 
 	return nil
 }
@@ -363,6 +376,27 @@ func (s *Service) notifyPermanentFailure(ctx context.Context, msg Message) error
 	}
 
 	return nil
+}
+
+func (s *Service) logPermanentFailureNotifyError(logger *slog.Logger, msg Message, err error) {
+	logger.Error("failed notify outbox permanent failure",
+		slog.Uint64("msg_id", msg.ID),
+		slog.String("recipient", msg.Recipient),
+		slog.String("err", err.Error()))
+}
+
+func (s *Service) logSendFailureResult(logger *slog.Logger, msg Message) {
+	logMsg := "outbox message send retry scheduled"
+	if msg.Status == MessageStatusFailed {
+		logMsg = "outbox message send failed permanently"
+	}
+
+	logger.Error(logMsg,
+		slog.Uint64("msg_id", msg.ID),
+		slog.Uint64("attempt", uint64(msg.Attempt)),
+		slog.Uint64("max_attempts", uint64(msg.MaxAttempts)),
+		slog.String("recipient", msg.Recipient),
+		slog.String("last_error", msg.LastError))
 }
 
 func (s *Service) rollbackSendAttempt(previous Message) error {
