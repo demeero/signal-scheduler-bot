@@ -291,12 +291,42 @@ func TestPoller_Poll_ScheduleCmd(t *testing.T) {
 	)
 }
 
+func TestPoller_Poll_HelpCmd(t *testing.T) {
+	location, err := time.LoadLocation("Europe/Kyiv")
+	require.NoError(t, err)
+
+	fixture := newTestOutboxFixture(t)
+	poller := newTestPoller(t, fixture.service, location, []string{"/help"}, nil)
+
+	err = poller.Poll(t.Context())
+	require.NoError(t, err)
+
+	messages, err := loadAllMessages(t, fixture.db)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	require.Equal(t, testAccount, messages[0].Recipient)
+	require.Contains(t, messages[0].Text, "Available commands:")
+	require.Contains(t, messages[0].Text, "/cancel MESSAGE_ID")
+}
+
+func TestCommandName(t *testing.T) {
+	require.Equal(t, "help", commandName(helpCommand{}))
+	require.Equal(t, "upcoming", commandName(upcomingCommand{}))
+	require.Equal(t, "cancel", commandName(cancelCommand{}))
+	require.Equal(t, "schedule", commandName(scheduleCommand{}))
+	require.Equal(t, "unknown", commandName(testUnknownCommand{}))
+}
+
 type testOutboxFixture struct {
 	db      *bolt.DB
 	service *outbox.Service
 }
 
 const testAccount = "+380999999999"
+
+type testUnknownCommand struct{}
+
+func (testUnknownCommand) isCommand() {}
 
 func newTestOutboxFixture(t *testing.T) testOutboxFixture {
 	t.Helper()
@@ -307,22 +337,24 @@ func newTestOutboxFixture(t *testing.T) testOutboxFixture {
 		require.NoError(t, db.Close())
 	})
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Errorf("unexpected method: got %s want %s", r.Method, http.MethodPost)
-			http.Error(w, "unexpected method", http.StatusMethodNotAllowed)
-			return
-		}
-		if r.URL.Path != "/v2/send" {
-			t.Errorf("unexpected path: got %s want %s", r.URL.Path, "/v2/send")
-			http.Error(w, "unexpected path", http.StatusNotFound)
-			return
-		}
-		w.WriteHeader(http.StatusCreated)
-	}))
-	t.Cleanup(server.Close)
-
-	signalClient := signaladapter.New(testAccount, server.URL, &http.Client{Timeout: time.Second})
+	signalClient := signaladapter.New(testAccount, "http://signal.test", &http.Client{
+		Timeout: time.Second,
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			recorder := httptest.NewRecorder()
+			if r.Method != http.MethodPost {
+				t.Errorf("unexpected method: got %s want %s", r.Method, http.MethodPost)
+				http.Error(recorder, "unexpected method", http.StatusMethodNotAllowed)
+				return recorder.Result(), nil
+			}
+			if r.URL.Path != "/v2/send" {
+				t.Errorf("unexpected path: got %s want %s", r.URL.Path, "/v2/send")
+				http.Error(recorder, "unexpected path", http.StatusNotFound)
+				return recorder.Result(), nil
+			}
+			recorder.WriteHeader(http.StatusCreated)
+			return recorder.Result(), nil
+		}),
+	})
 
 	service, err := outbox.New(5, 15*time.Minute, 30*24*time.Hour, db, signalClient)
 	require.NoError(t, err)
@@ -342,34 +374,43 @@ func newTestPoller(
 ) *Poller {
 	t.Helper()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/v1/receive/"+testAccount:
-			query := r.URL.Query()
-			if query.Get("ignore_attachments") != "true" ||
-				query.Get("ignore_stories") != "true" ||
-				query.Get("ignore_avatars") != "true" ||
-				query.Get("ignore_stickers") != "true" ||
-				query.Get("send_read_receipts") != "false" {
-				t.Errorf("unexpected receive query: %s", r.URL.RawQuery)
-				http.Error(w, "unexpected query", http.StatusBadRequest)
-				return
+	signalClient := signaladapter.New(testAccount, "http://signal.test", &http.Client{
+		Timeout: time.Second,
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			recorder := httptest.NewRecorder()
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/v1/receive/"+testAccount:
+				query := r.URL.Query()
+				if query.Get("ignore_attachments") != "true" ||
+					query.Get("ignore_stories") != "true" ||
+					query.Get("ignore_avatars") != "true" ||
+					query.Get("ignore_stickers") != "true" ||
+					query.Get("send_read_receipts") != "false" {
+					t.Errorf("unexpected receive query: %s", r.URL.RawQuery)
+					http.Error(recorder, "unexpected query", http.StatusBadRequest)
+					return recorder.Result(), nil
+				}
+
+				writeReceiveMessagesJSON(t, recorder, testAccount, receiveBodies)
+			case r.Method == http.MethodGet && r.URL.Path == "/v1/contacts/"+testAccount:
+				if err := json.NewEncoder(recorder).Encode(contacts); err != nil {
+					t.Errorf("failed to encode contacts response: %v", err)
+				}
+			default:
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL.String())
+				http.Error(recorder, "unexpected request", http.StatusNotFound)
 			}
 
-			writeReceiveMessagesJSON(t, w, testAccount, receiveBodies)
-		case r.Method == http.MethodGet && r.URL.Path == "/v1/contacts/"+testAccount:
-			if err := json.NewEncoder(w).Encode(contacts); err != nil {
-				t.Errorf("failed to encode contacts response: %v", err)
-			}
-		default:
-			t.Errorf("unexpected request: %s %s", r.Method, r.URL.String())
-			http.Error(w, "unexpected request", http.StatusNotFound)
-		}
-	}))
-	t.Cleanup(server.Close)
-
-	signalClient := signaladapter.New(testAccount, server.URL, &http.Client{Timeout: time.Second})
+			return recorder.Result(), nil
+		}),
+	})
 	return New(testAccount, location, signalClient, outboxSvc)
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
 }
 
 func writeReceiveMessagesJSON(t *testing.T, w http.ResponseWriter, account string, bodies []string) {

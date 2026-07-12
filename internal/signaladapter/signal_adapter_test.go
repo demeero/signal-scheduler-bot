@@ -11,12 +11,112 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSignalAdapter_ResolveRecipient_ByPhone(t *testing.T) {
+	const account = "+380500000000"
+
+	adapter := newTestAdapter(t, account, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "/v1/contacts/"+account, r.URL.Path)
+		writeReceiveJSON(t, w, contactsResponse{
+			{
+				Name:   "Alice",
+				Number: "+380501112233",
+				UUID:   "alice-uuid",
+			},
+		})
+	}))
+
+	recipient, err := adapter.ResolveRecipient(t.Context(), " +380501112233 ")
+	require.NoError(t, err)
+	require.Equal(t, "+380501112233", recipient)
+}
+
+func TestSignalAdapter_ResolveRecipient_ByNameUsesUUIDFallback(t *testing.T) {
+	const account = "+380500000000"
+
+	adapter := newTestAdapter(t, account, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "/v1/contacts/"+account, r.URL.Path)
+		writeReceiveJSON(t, w, contactsResponse{
+			{
+				Name: "Alice Smith",
+				UUID: "alice-uuid",
+			},
+		})
+	}))
+
+	recipient, err := adapter.ResolveRecipient(t.Context(), "Alice Smith")
+	require.NoError(t, err)
+	require.Equal(t, "alice-uuid", recipient)
+}
+
+func TestSignalAdapter_ResolveRecipient_ReturnsConflictForAmbiguousMatch(t *testing.T) {
+	const account = "+380500000000"
+
+	adapter := newTestAdapter(t, account, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "/v1/contacts/"+account, r.URL.Path)
+		writeReceiveJSON(t, w, contactsResponse{
+			{Name: "Alice"},
+			{Name: "Alice"},
+		})
+	}))
+
+	_, err := adapter.ResolveRecipient(t.Context(), "Alice")
+	require.Error(t, err)
+	require.ErrorContains(t, err, "found 2 contacts matching")
+}
+
+func TestParseRecipient(t *testing.T) {
+	tests := []struct {
+		name      string
+		recipient string
+		want      recipientRef
+		wantErr   string
+	}{
+		{
+			name:      "phone number",
+			recipient: "+380501112233",
+			want: recipientRef{
+				Value:      "+380501112233",
+				IsPhoneNum: true,
+			},
+		},
+		{
+			name:      "contact name",
+			recipient: " Alice Smith ",
+			want: recipientRef{
+				Value: "Alice Smith",
+			},
+		},
+		{
+			name:      "empty",
+			recipient: "  ",
+			wantErr:   "recipient is empty",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseRecipient(tt.recipient)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestSignalAdapter_SendMessage(t *testing.T) {
 	const account = "+380500000000"
 	const recipient = "+380501112233"
 	const body = "Test message"
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	adapter := newTestAdapter(t, account, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
 		assert.Equal(t, "/v2/send", r.URL.Path)
 
@@ -30,22 +130,16 @@ func TestSignalAdapter_SendMessage(t *testing.T) {
 
 		w.WriteHeader(http.StatusCreated)
 	}))
-	t.Cleanup(server.Close)
-
-	adapter := New(account, server.URL, &http.Client{Timeout: time.Second})
 
 	err := adapter.SendMessage(t.Context(), "  "+recipient+"  ", body)
 	require.NoError(t, err)
 }
 
 func TestSignalAdapter_SendMessage_HTTPJSONError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	adapter := newTestAdapter(t, "+380500000000", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		writeReceiveJSON(t, w, map[string]string{"error": "recipient missing"})
 	}))
-	t.Cleanup(server.Close)
-
-	adapter := New("+380500000000", server.URL, &http.Client{Timeout: time.Second})
 
 	err := adapter.SendMessage(t.Context(), "+380501112233", "Test message")
 	require.Error(t, err)
@@ -54,14 +148,11 @@ func TestSignalAdapter_SendMessage_HTTPJSONError(t *testing.T) {
 }
 
 func TestSignalAdapter_SendMessage_HTTPTextError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	adapter := newTestAdapter(t, "+380500000000", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_, err := w.Write([]byte("temporarily unavailable"))
 		assert.NoError(t, err)
 	}))
-	t.Cleanup(server.Close)
-
-	adapter := New("+380500000000", server.URL, &http.Client{Timeout: time.Second})
 
 	err := adapter.SendMessage(t.Context(), "+380501112233", "Test message")
 	require.Error(t, err)
@@ -73,7 +164,7 @@ func TestSignalAdapter_SendSelfMessage(t *testing.T) {
 	const account = "+380500000000"
 	const body = "Self note"
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	adapter := newTestAdapter(t, account, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
 		assert.Equal(t, "/v2/send", r.URL.Path)
 
@@ -87,9 +178,6 @@ func TestSignalAdapter_SendSelfMessage(t *testing.T) {
 
 		w.WriteHeader(http.StatusAccepted)
 	}))
-	t.Cleanup(server.Close)
-
-	adapter := New(account, server.URL, &http.Client{Timeout: time.Second})
 
 	err := adapter.SendSelfMessage(t.Context(), body)
 	require.NoError(t, err)
@@ -98,7 +186,7 @@ func TestSignalAdapter_SendSelfMessage(t *testing.T) {
 func TestSignalAdapter_ReceiveSelfMessages(t *testing.T) {
 	const account = "+380500000000"
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	adapter := newTestAdapter(t, account, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
 		assert.Equal(t, "/v1/receive/"+account, r.URL.Path)
 
@@ -206,9 +294,6 @@ func TestSignalAdapter_ReceiveSelfMessages(t *testing.T) {
 			},
 		})
 	}))
-	t.Cleanup(server.Close)
-
-	adapter := New(account, server.URL, &http.Client{Timeout: time.Second})
 
 	messages, err := adapter.ReceiveSelfMessages(t.Context())
 	require.NoError(t, err)
@@ -228,13 +313,10 @@ func TestSignalAdapter_ReceiveSelfMessages(t *testing.T) {
 }
 
 func TestSignalAdapter_ReceiveSelfMessages_HTTPJSONError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	adapter := newTestAdapter(t, "+380500000000", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		writeReceiveJSON(t, w, map[string]string{"error": "signal service unavailable"})
 	}))
-	t.Cleanup(server.Close)
-
-	adapter := New("+380500000000", server.URL, &http.Client{Timeout: time.Second})
 
 	_, err := adapter.ReceiveSelfMessages(t.Context())
 	require.Error(t, err)
@@ -243,14 +325,11 @@ func TestSignalAdapter_ReceiveSelfMessages_HTTPJSONError(t *testing.T) {
 }
 
 func TestSignalAdapter_ReceiveSelfMessages_HTTPTextError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	adapter := newTestAdapter(t, "+380500000000", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 		_, err := w.Write([]byte("upstream reset"))
 		assert.NoError(t, err)
 	}))
-	t.Cleanup(server.Close)
-
-	adapter := New("+380500000000", server.URL, &http.Client{Timeout: time.Second})
 
 	_, err := adapter.ReceiveSelfMessages(t.Context())
 	require.Error(t, err)
@@ -259,18 +338,36 @@ func TestSignalAdapter_ReceiveSelfMessages_HTTPTextError(t *testing.T) {
 }
 
 func TestSignalAdapter_ReceiveSelfMessages_DecodeError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	adapter := newTestAdapter(t, "+380500000000", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, err := w.Write([]byte("{"))
 		assert.NoError(t, err)
 	}))
-	t.Cleanup(server.Close)
-
-	adapter := New("+380500000000", server.URL, &http.Client{Timeout: time.Second})
 
 	_, err := adapter.ReceiveSelfMessages(t.Context())
 	require.Error(t, err)
 	require.ErrorContains(t, err, "failed to decode receive response")
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+func newTestAdapter(t *testing.T, account string, handler http.HandlerFunc) *SignalAdapter {
+	t.Helper()
+
+	client := &http.Client{
+		Timeout: time.Second,
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			recorder := httptest.NewRecorder()
+			handler(recorder, r)
+			return recorder.Result(), nil
+		}),
+	}
+
+	return New(account, "http://signal.test", client)
 }
 
 func writeReceiveJSON(t *testing.T, w http.ResponseWriter, payload any) {

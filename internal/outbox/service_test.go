@@ -590,7 +590,6 @@ func TestService_Vacuum_DeletesOnlyOldTerminalMessages(t *testing.T) {
 type serviceFixture struct {
 	db        *bolt.DB
 	service   *Service
-	server    *httptest.Server
 	responses []testSendResponse
 	requested []testSendRequest
 	mu        sync.Mutex
@@ -639,50 +638,56 @@ func newServiceFixtureWithConfig(t *testing.T, maxAge, vacuumAge time.Duration, 
 		responses: append([]testSendResponse(nil), responses...),
 	}
 
-	fixture.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Errorf("unexpected method: got %s want %s", r.Method, http.MethodPost)
-			http.Error(w, "unexpected method", http.StatusMethodNotAllowed)
-			return
-		}
-		if r.URL.Path != "/v2/send" {
-			t.Errorf("unexpected path: got %s want %s", r.URL.Path, "/v2/send")
-			http.Error(w, "unexpected path", http.StatusNotFound)
-			return
-		}
+	client := &http.Client{
+		Timeout: time.Second,
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			recorder := httptest.NewRecorder()
 
-		var req testSendRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Errorf("decode request: %v", err)
-			http.Error(w, "bad request", http.StatusBadRequest)
-			return
-		}
-
-		fixture.mu.Lock()
-		fixture.requested = append(fixture.requested, req)
-
-		resp := testSendResponse{statusCode: http.StatusCreated}
-		if len(fixture.responses) > 0 {
-			resp = fixture.responses[0]
-			fixture.responses = fixture.responses[1:]
-		}
-		fixture.mu.Unlock()
-
-		if resp.statusCode == 0 {
-			resp.statusCode = http.StatusCreated
-		}
-		w.WriteHeader(resp.statusCode)
-		if resp.body != "" {
-			_, writeErr := w.Write([]byte(resp.body))
-			if writeErr != nil {
-				t.Errorf("write response: %v", writeErr)
+			if r.Method != http.MethodPost {
+				t.Errorf("unexpected method: got %s want %s", r.Method, http.MethodPost)
+				http.Error(recorder, "unexpected method", http.StatusMethodNotAllowed)
+				return recorder.Result(), nil
 			}
-		}
-	}))
-	t.Cleanup(fixture.server.Close)
+			if r.URL.Path != "/v2/send" {
+				t.Errorf("unexpected path: got %s want %s", r.URL.Path, "/v2/send")
+				http.Error(recorder, "unexpected path", http.StatusNotFound)
+				return recorder.Result(), nil
+			}
 
-	client := signaladapter.New("+380500000000", fixture.server.URL, &http.Client{Timeout: time.Second})
-	fixture.service, err = New(5, maxAge, vacuumAge, db, client)
+			var req testSendRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Errorf("decode request: %v", err)
+				http.Error(recorder, "bad request", http.StatusBadRequest)
+				return recorder.Result(), nil
+			}
+
+			fixture.mu.Lock()
+			fixture.requested = append(fixture.requested, req)
+
+			resp := testSendResponse{statusCode: http.StatusCreated}
+			if len(fixture.responses) > 0 {
+				resp = fixture.responses[0]
+				fixture.responses = fixture.responses[1:]
+			}
+			fixture.mu.Unlock()
+
+			if resp.statusCode == 0 {
+				resp.statusCode = http.StatusCreated
+			}
+			recorder.WriteHeader(resp.statusCode)
+			if resp.body != "" {
+				_, writeErr := recorder.Write([]byte(resp.body))
+				if writeErr != nil {
+					t.Errorf("write response: %v", writeErr)
+				}
+			}
+
+			return recorder.Result(), nil
+		}),
+	}
+
+	clientAdapter := signaladapter.New("+380500000000", "http://signal.test", client)
+	fixture.service, err = New(5, maxAge, vacuumAge, db, clientAdapter)
 	require.NoError(t, err)
 
 	return fixture

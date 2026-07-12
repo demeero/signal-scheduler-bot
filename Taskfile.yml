@@ -47,3 +47,11 @@ tasks:
     desc: Run unit and integration tests.
     cmds:
       - go test -count 1 -race -v ./...
+
+  test:coverage:
+    desc: Run tests with coverage summary and HTML report.
+    cmds:
+      - mkdir -p .coverage
+      - go test -count 1 -coverprofile=.coverage/cover.out ./...
+      - go tool cover -func=.coverage/cover.out
+      - go tool cover -html=.coverage/cover.out -o .coverage/cover.html
