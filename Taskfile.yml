@@ -1,0 +1,49 @@
+version: "3"
+
+vars:
+  GOLANGCI_LINT_VERSION: '{{.GOLANGCI_LINT_VERSION | default "2.12"}}'
+
+dotenv: [ ".env" ]
+
+tasks:
+  deps:
+    desc: Install Go module dependencies
+    cmds:
+      - go mod download
+      - go mod tidy
+      - go mod vendor
+
+  lint:
+    desc: Run Go linters
+    cmds:
+      - docker run --rm -v ${PWD}/:/app -w /app golangci/golangci-lint:v{{.GOLANGCI_LINT_VERSION}}-alpine golangci-lint run -v
+
+  fmt:
+    desc: Run Go linters
+    cmds:
+      - docker run --rm -v ${PWD}/:/app -w /app golangci/golangci-lint:v{{.GOLANGCI_LINT_VERSION}}-alpine golangci-lint -v fmt
+
+  build:
+    desc: Build API binary
+    cmds:
+      - task: build:binary
+        vars:
+          BINARY_PATH: ./cmd/api/...
+
+  build:binary:
+    internal: true
+    vars:
+      GOOS: '{{.GOOS | default OS}}'
+      GOARCH: '{{.GOARCH | default ARCH}}'
+    cmds:
+      - GOOS={{.GOOS}} GOARCH={{.GOARCH}} go build -v -o bin {{.BINARY_PATH}}
+
+  run:
+    desc: Run API server locally.
+    cmds:
+      - go run ./cmd/botsrv
+
+  test:
+    desc: Run unit and integration tests.
+    cmds:
+      - go test -count 1 -race -v ./...

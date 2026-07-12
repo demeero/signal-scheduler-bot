@@ -1,0 +1,149 @@
+version: "2"
+
+run:
+  issues-exit-code: 1
+#  tests: false
+  timeout: 5m
+  go: "1.26"
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  fix: true
+
+linters:
+  default: all
+  disable:
+    - depguard # A Go linter that checks package imports are in a list of acceptable packages (https://github.com/OpenPeeDeeP/depguard)
+    - err113 # https://github.com/Djarvur/go-err113
+    - exhaustruct # Checks if all structure fields are initialized (https://github.com/GaijinEntertainment/go-exhaustruct)
+    - wrapcheck # Checks that errors returned from external packages are wrapped (https://github.com/tomarrell/wrapcheck)
+    - varnamelen # Checks that the length of a variable's name matches its scope (https://github.com/blizzy78/varnamelen)
+    - tagliatelle # Checks the struct tags (https://github.com/ldez/tagliatelle)
+    - musttag # Enforce field tags in (un)marshaled structs (https://github.com/go-simpler/musttag)
+    - mnd # An analyzer to detect magic numbers (https://github.com/tommy-muehle/go-mnd)
+    - godox # Detects usage of FIXME, TODO and other keywords inside comments (https://github.com/matoous/godox)
+    - wsl # Add or remove empty lines (https://github.com/bombsimon/wsl)
+    - nlreturn # Nlreturn checks for a new line before return and branch statements to increase code clarity (https://github.com/ssgreg/nlreturn)
+    - inamedparam # A linter that reports interfaces with unnamed method parameters.
+    - gochecknoglobals # Check that no globals are present in Go code.
+    - noctx # finds function calls without context.Context.
+    - noinlineerr # A Go linter that forbids inline error handling using if err := ...; err != nil
+    - wsl_v5 # Add or remove empty lines.
+    - embeddedstructfieldcheck # (conflict with fieldalignment) Embedded types should be at the top of the field list of a struct, and there must be an empty line separating embedded fields from regular fields.
+    - gochecknoinits # Check that no inits functions are present in Go code.
+    - nonamedreturns # A linter that reports functions with named return values.
+    - testpackage # makes you use a separate _test package.
+    - ireturn # A linter that reports interface return values.
+    - iface # Detect the incorrect use of interfaces, helping developers avoid interface pollution.
+  settings:
+    revive:
+      enable-default-rules: true
+      rules:
+        - name: blank-imports
+          disabled: true
+    paralleltest:
+      ignore-missing: true
+      ignore-missing-subtests: true
+    cyclop:
+      max-complexity: 12
+      package-average: 6.5
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+    errorlint:
+      errorf: false
+      asserts: true
+      comparison: true
+    forbidigo:
+      forbid:
+        - pattern: ^print.*$
+    funlen:
+      lines: 155
+      statements: 85
+    gocognit:
+      min-complexity: 20
+    goconst:
+      min-len: 2
+      min-occurrences: 3
+    gocritic:
+      disabled-checks:
+        - regexpMust
+        - commentedOutCode
+        - whyNoLint
+        - appendAssign
+        - exitAfterDefer
+        - unnamedResult
+        - importShadow
+      enable-all: true
+      settings:
+        hugeParam:
+          sizeThreshold: 600
+        rangeValCopy:
+          sizeThreshold: 500
+    gocyclo:
+      min-complexity: 12
+    gosec:
+      excludes:
+        - G101
+        - G108
+        - G201
+        - G115
+    govet:
+      enable-all: true
+      disable:
+        - composites
+        - shadow
+        - asmdecl
+        - cgocall
+        - findcall
+    lll:
+      line-length: 180
+    nestif:
+      min-complexity: 5
+    rowserrcheck:
+      packages:
+        - github.com/jmoiron/sqlx
+    staticcheck:
+      checks:
+        - all
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - cyclop
+          - goconst
+          - funlen
+          - dupl
+          - errcheck
+          - exhaustive
+          - nilnil
+          - revive
+        path: (.+)_test\.go
+    paths:
+      - ^signalclient/
+      - third_party$
+      - builtin$
+      - examples$
+      - e2e
+      - gen
+formatters:
+  enable:
+    - gofmt
+    - goimports
+    - golines
+  settings:
+    golines:
+      max-len: 150
+      reformat-tags: false
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
