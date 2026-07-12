@@ -3,6 +3,7 @@ package bot
 import (
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -18,7 +19,7 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-func TestPollerHandleUpcomingCmdNoUpcomingMessages(t *testing.T) {
+func TestPoller_Poll_UpcomingNoUpcomingMessages(t *testing.T) {
 	location, err := time.LoadLocation("Europe/Kyiv")
 	require.NoError(t, err)
 
@@ -31,9 +32,9 @@ func TestPollerHandleUpcomingCmdNoUpcomingMessages(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	poller := New("+380999999999", location, nil, fixture.service)
+	poller := newTestPoller(t, fixture.service, "+380999999999", location, []string{"/upcoming"}, nil)
 
-	err = poller.handleUpcomingCmd(t.Context())
+	err = poller.Poll(t.Context())
 	require.NoError(t, err)
 
 	messages, err := loadAllMessages(t, fixture.db)
@@ -45,7 +46,7 @@ func TestPollerHandleUpcomingCmdNoUpcomingMessages(t *testing.T) {
 	require.Equal(t, "+380999999999", reply.Recipient)
 }
 
-func TestPollerHandleUpcomingCmdListsFuturePendingMessages(t *testing.T) {
+func TestPoller_Poll_UpcomingListsFuturePendingMessages(t *testing.T) {
 	location, err := time.LoadLocation("Europe/Kyiv")
 	require.NoError(t, err)
 
@@ -84,9 +85,9 @@ func TestPollerHandleUpcomingCmdListsFuturePendingMessages(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	poller := New("+380999999999", location, nil, fixture.service)
+	poller := newTestPoller(t, fixture.service, "+380999999999", location, []string{"/upcoming"}, nil)
 
-	err = poller.handleUpcomingCmd(t.Context())
+	err = poller.Poll(t.Context())
 	require.NoError(t, err)
 
 	messages, err := loadAllMessages(t, fixture.db)
@@ -103,7 +104,7 @@ func TestPollerHandleUpcomingCmdListsFuturePendingMessages(t *testing.T) {
 	}, "\n"), reply.Text)
 }
 
-func TestPollerHandleUpcomingCmdHidesOverduePendingMessages(t *testing.T) {
+func TestPoller_Poll_UpcomingHidesOverduePendingMessages(t *testing.T) {
 	location, err := time.LoadLocation("Europe/Kyiv")
 	require.NoError(t, err)
 
@@ -116,9 +117,9 @@ func TestPollerHandleUpcomingCmdHidesOverduePendingMessages(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	poller := New("+380999999999", location, nil, fixture.service)
+	poller := newTestPoller(t, fixture.service, "+380999999999", location, []string{"/upcoming"}, nil)
 
-	err = poller.handleUpcomingCmd(t.Context())
+	err = poller.Poll(t.Context())
 	require.NoError(t, err)
 
 	upcoming, err := fixture.service.LoadUpcomingMessages(t.Context())
@@ -133,7 +134,7 @@ func TestPollerHandleUpcomingCmdHidesOverduePendingMessages(t *testing.T) {
 	require.Equal(t, "Upcoming messages: 0", reply.Text)
 }
 
-func TestPollerHandleCancelCmd(t *testing.T) {
+func TestPoller_Poll_CancelCmd(t *testing.T) {
 	location, err := time.LoadLocation("Europe/Kyiv")
 	require.NoError(t, err)
 
@@ -146,9 +147,16 @@ func TestPollerHandleCancelCmd(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	poller := New("+380999999999", location, nil, fixture.service)
+	poller := newTestPoller(
+		t,
+		fixture.service,
+		"+380999999999",
+		location,
+		[]string{"/cancel " + strconv.FormatUint(created.ID, 10)},
+		nil,
+	)
 
-	err = poller.handleCancelCmd(t.Context(), cancelCommand{id: created.ID})
+	err = poller.Poll(t.Context())
 	require.NoError(t, err)
 
 	stored, err := loadStoredMessageByID(t, fixture.db, created.ID)
@@ -164,20 +172,27 @@ func TestPollerHandleCancelCmd(t *testing.T) {
 	require.Equal(t, "+380999999999", reply.Recipient)
 }
 
-func TestPollerHandleCancelCmdReturnsNotFound(t *testing.T) {
+func TestPoller_Poll_CancelCmdReturnsNotFound(t *testing.T) {
 	location, err := time.LoadLocation("Europe/Kyiv")
 	require.NoError(t, err)
 
 	fixture := newTestOutboxFixture(t)
-	poller := New("+380999999999", location, nil, fixture.service)
+	poller := newTestPoller(t, fixture.service, "+380999999999", location, []string{"/cancel 42"}, nil)
 
-	err = poller.handleCancelCmd(t.Context(), cancelCommand{id: 42})
-	require.Error(t, err)
-	require.ErrorIs(t, err, errbrick.ErrNotFound)
-	require.ErrorContains(t, err, "failed cancel outbox message")
+	err = poller.Poll(t.Context())
+	require.NoError(t, err)
+
+	messages, err := loadAllMessages(t, fixture.db)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+
+	reply := messages[0]
+	require.Equal(t, "+380999999999", reply.Recipient)
+	require.Contains(t, reply.Text, "failed cancel outbox message")
+	require.Contains(t, reply.Text, "outbox message 42")
 }
 
-func TestPollerHandleCancelCmdReturnsConflict(t *testing.T) {
+func TestPoller_Poll_CancelCmdReturnsConflict(t *testing.T) {
 	location, err := time.LoadLocation("Europe/Kyiv")
 	require.NoError(t, err)
 
@@ -190,58 +205,69 @@ func TestPollerHandleCancelCmdReturnsConflict(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	poller := New("+380999999999", location, nil, fixture.service)
+	poller := newTestPoller(
+		t,
+		fixture.service,
+		"+380999999999",
+		location,
+		[]string{"/cancel " + strconv.FormatUint(created.ID, 10)},
+		nil,
+	)
 
-	err = poller.handleCancelCmd(t.Context(), cancelCommand{id: created.ID})
-	require.Error(t, err)
-	require.ErrorIs(t, err, errbrick.ErrConflict)
-	require.ErrorContains(t, err, "failed cancel outbox message")
+	err = poller.Poll(t.Context())
+	require.NoError(t, err)
+
+	stored, err := loadStoredMessageByID(t, fixture.db, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, outbox.MessageStatusPending, stored.Status)
+
+	messages, err := loadAllMessages(t, fixture.db)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+
+	reply := messages[len(messages)-1]
+	require.Equal(t, "+380999999999", reply.Recipient)
+	require.Contains(t, reply.Text, "failed cancel outbox message")
+	require.Contains(t, reply.Text, "already due")
 }
 
-func TestPollerHandleScheduleCmd(t *testing.T) {
+func TestPoller_Poll_ScheduleCmd(t *testing.T) {
 	location, err := time.LoadLocation("Europe/Kyiv")
 	require.NoError(t, err)
 
 	fixture := newTestOutboxFixture(t)
 	account := "+380999999999"
+	scheduledLocal := time.Now().In(location).AddDate(0, 0, 2)
+	scheduledLocal = time.Date(
+		scheduledLocal.Year(),
+		scheduledLocal.Month(),
+		scheduledLocal.Day(),
+		15,
+		30,
+		0,
+		0,
+		location,
+	)
 
-	contactsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			t.Errorf("unexpected method: got %s want %s", r.Method, http.MethodGet)
-			http.Error(w, "unexpected method", http.StatusMethodNotAllowed)
-			return
-		}
-		if r.URL.Path != "/v1/contacts/"+account {
-			t.Errorf("unexpected path: got %s want %s", r.URL.Path, "/v1/contacts/"+account)
-			http.Error(w, "unexpected path", http.StatusNotFound)
-			return
-		}
-
-		if err := json.NewEncoder(w).Encode([]map[string]string{
+	poller := newTestPoller(
+		t,
+		fixture.service,
+		account,
+		location,
+		[]string{fmt.Sprintf(
+			`/schedule %s %s "Alice Smith" Hello there`,
+			scheduledLocal.Format("2006-01-02"),
+			scheduledLocal.Format("15:04"),
+		)},
+		[]map[string]string{
 			{
 				"name":   "Alice Smith",
 				"number": "+380501112233",
 			},
-		}); err != nil {
-			t.Errorf("failed to encode contacts response: %v", err)
-		}
-	}))
-	t.Cleanup(contactsServer.Close)
-
-	poller := New(
-		account,
-		location,
-		signaladapter.New(account, contactsServer.URL, &http.Client{Timeout: time.Second}),
-		fixture.service,
+		},
 	)
 
-	cmd := scheduleCommand{
-		When:      time.Date(2026, time.July, 13, 12, 30, 0, 0, time.UTC),
-		Recipient: "Alice Smith",
-		Text:      "Hello there",
-	}
-
-	err = poller.handleScheduleCmd(t.Context(), cmd)
+	err = poller.Poll(t.Context())
 	require.NoError(t, err)
 
 	messages, err := loadAllMessages(t, fixture.db)
@@ -249,16 +275,21 @@ func TestPollerHandleScheduleCmd(t *testing.T) {
 	require.Len(t, messages, 2)
 
 	created := messages[0]
-	require.Equal(t, cmd.When, created.ScheduledAt)
-	require.Equal(t, cmd.Recipient, created.Recipient)
+	require.Equal(t, scheduledLocal.UTC(), created.ScheduledAt)
+	require.Equal(t, "Alice Smith", created.Recipient)
 	require.Equal(t, "+380501112233", created.RecipientIdentifier)
-	require.Equal(t, cmd.Text, created.Text)
+	require.Equal(t, "Hello there", created.Text)
 
 	reply := messages[1]
 	require.Equal(t, account, reply.Recipient)
 	require.Equal(
 		t,
-		"Scheduled message "+strconv.FormatUint(created.ID, 10)+" for 2026-07-13 15:30 (Europe/Kyiv) to Alice Smith.",
+		"Scheduled message "+strconv.FormatUint(
+			created.ID,
+			10,
+		)+" for "+scheduledLocal.Format(
+			"2006-01-02 15:04",
+		)+" ("+location.String()+") to Alice Smith.",
 		reply.Text,
 	)
 }
@@ -300,6 +331,74 @@ func newTestOutboxFixture(t *testing.T) testOutboxFixture {
 	return testOutboxFixture{
 		db:      db,
 		service: service,
+	}
+}
+
+func newTestPoller(
+	t *testing.T,
+	outboxSvc *outbox.Service,
+	account string,
+	location *time.Location,
+	receiveBodies []string,
+	contacts []map[string]string,
+) *Poller {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/receive/"+account:
+			query := r.URL.Query()
+			if query.Get("ignore_attachments") != "true" ||
+				query.Get("ignore_stories") != "true" ||
+				query.Get("ignore_avatars") != "true" ||
+				query.Get("ignore_stickers") != "true" ||
+				query.Get("send_read_receipts") != "false" {
+				t.Errorf("unexpected receive query: %s", r.URL.RawQuery)
+				http.Error(w, "unexpected query", http.StatusBadRequest)
+				return
+			}
+
+			writeReceiveMessagesJSON(t, w, account, receiveBodies)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/contacts/"+account:
+			if err := json.NewEncoder(w).Encode(contacts); err != nil {
+				t.Errorf("failed to encode contacts response: %v", err)
+			}
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.String())
+			http.Error(w, "unexpected request", http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	signalClient := signaladapter.New(account, server.URL, &http.Client{Timeout: time.Second})
+	return New(account, location, signalClient, outboxSvc)
+}
+
+func writeReceiveMessagesJSON(t *testing.T, w http.ResponseWriter, account string, bodies []string) {
+	t.Helper()
+
+	payload := make([]map[string]any, 0, len(bodies))
+	for i, body := range bodies {
+		timestamp := int64(1_780_293_400_000 + i*1_000)
+		payload = append(payload, map[string]any{
+			"account": account,
+			"envelope": map[string]any{
+				"sourceUuid":               fmt.Sprintf("self-%d", i+1),
+				"serverReceivedTimestamp":  timestamp + 1,
+				"serverDeliveredTimestamp": timestamp + 2,
+				"syncMessage": map[string]any{
+					"sentMessage": map[string]any{
+						"destinationNumber": account,
+						"message":           body,
+						"timestamp":         timestamp,
+					},
+				},
+			},
+		})
+	}
+
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		t.Errorf("failed to encode receive response: %v", err)
 	}
 }
 

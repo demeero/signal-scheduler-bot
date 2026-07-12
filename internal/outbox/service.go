@@ -170,6 +170,10 @@ func (s *Service) SendDue(ctx context.Context) error {
 
 	logger := logbrick.FromCtx(ctx)
 	for _, msg := range messages {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		if msg.IsExpired(now, s.maxAge) {
 			expired, err := s.failExpiredMessage(msg.ID, now)
 			if err != nil {
@@ -201,6 +205,14 @@ func (s *Service) SendDue(ctx context.Context) error {
 				slog.Uint64("attempt", uint64(sent.Attempt)),
 				slog.String("recipient", sent.Recipient))
 			continue
+		}
+
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			if err := s.rollbackSendAttempt(msg); err != nil {
+				return fmt.Errorf("failed rollback send attempt for outbox message %d: %w", msg.ID, err)
+			}
+
+			return ctxErr
 		}
 
 		finalized, err := s.finishSendFailure(attempted.ID, sendErr.Error())
@@ -347,6 +359,21 @@ func (s *Service) finishSendFailure(id uint64, lastErr string) (Message, error) 
 	}
 
 	return updated, nil
+}
+
+func (s *Service) rollbackSendAttempt(previous Message) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		current, bucket, err := s.loadMessageForUpdate(tx, previous.ID)
+		if err != nil {
+			return err
+		}
+
+		if current.Status != previous.Status || current.Attempt != previous.Attempt+1 {
+			return fmt.Errorf("%w: outbox message %d send attempt state changed", errbrick.ErrConflict, previous.ID)
+		}
+
+		return storeMessage(bucket, previous)
+	})
 }
 
 func (s *Service) loadMessageForUpdate(tx *bbolt.Tx, id uint64) (Message, *bbolt.Bucket, error) {

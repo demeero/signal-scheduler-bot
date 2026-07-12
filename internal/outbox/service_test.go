@@ -1,6 +1,7 @@
 package outbox
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -419,6 +420,50 @@ func TestServiceSendDueContinuesBatchAfterSendFailure(t *testing.T) {
 	require.Len(t, fixture.requests(), 2)
 }
 
+func TestServiceSendDueRollsBackAttemptOnContextCancel(t *testing.T) {
+	db, err := bolt.Open(filepath.Join(t.TempDir(), "test.db"), 0o600, &bolt.Options{Timeout: time.Second})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, db.Close())
+	})
+
+	requestStarted := make(chan struct{})
+	httpClient := &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			close(requestStarted)
+			<-r.Context().Done()
+			return nil, r.Context().Err()
+		}),
+	}
+	client := signaladapter.New("+380500000000", "http://signal.test", httpClient)
+	service, err := New(5, 15*time.Minute, db, client)
+	require.NoError(t, err)
+
+	created, err := service.CreateMessage(t.Context(), CreateMessageParams{
+		ScheduledAt:         time.Now().UTC().Add(-time.Minute),
+		Recipient:           "Alice",
+		RecipientIdentifier: "+380501112233",
+		Text:                "hello",
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- service.SendDue(ctx)
+	}()
+
+	<-requestStarted
+	cancel()
+
+	err = <-errCh
+	require.ErrorIs(t, err, context.Canceled)
+
+	stored, err := loadMessageByID(t, db, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, created, stored)
+}
+
 func TestMessageStartSendAttemptRejectsInvalidState(t *testing.T) {
 	msg := Message{ID: 1, Status: MessageStatusSent, MaxAttempts: 5}
 
@@ -485,6 +530,12 @@ type testSendRequest struct {
 type testSendResponse struct {
 	body       string
 	statusCode int
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
 }
 
 func newServiceFixture(t *testing.T, responses ...testSendResponse) *serviceFixture {
