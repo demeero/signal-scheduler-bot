@@ -229,7 +229,7 @@ func newTestOutboxFixture(t *testing.T) testOutboxFixture {
 
 	signalClient := signaladapter.New("+380999999999", server.URL, &http.Client{Timeout: time.Second})
 
-	service, err := outbox.New(5, db, signalClient)
+	service, err := outbox.New(5, 15*time.Minute, db, signalClient)
 	require.NoError(t, err)
 
 	return testOutboxFixture{

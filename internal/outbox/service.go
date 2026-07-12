@@ -30,13 +30,15 @@ type Service struct {
 	db           *bbolt.DB
 	signalClient *signaladapter.SignalAdapter
 	maxAttempts  uint16
+	maxAge       time.Duration
 }
 
-func New(maxAttempts uint16, db *bbolt.DB, signalClient *signaladapter.SignalAdapter) (*Service, error) {
+func New(maxAttempts uint16, maxAge time.Duration, db *bbolt.DB, signalClient *signaladapter.SignalAdapter) (*Service, error) {
 	s := &Service{
 		db:           db,
 		signalClient: signalClient,
 		maxAttempts:  maxAttempts,
+		maxAge:       maxAge,
 	}
 
 	err := s.db.Update(func(tx *bbolt.Tx) error {
@@ -168,6 +170,20 @@ func (s *Service) SendDue(ctx context.Context) error {
 
 	logger := logbrick.FromCtx(ctx)
 	for _, msg := range messages {
+		if msg.IsExpired(now, s.maxAge) {
+			expired, err := s.failExpiredMessage(msg.ID, now)
+			if err != nil {
+				return fmt.Errorf("failed mark expired outbox message %d: %w", msg.ID, err)
+			}
+
+			logger.Error("outbox message expired before send",
+				slog.Uint64("msg_id", expired.ID),
+				slog.String("recipient", expired.Recipient),
+				slog.Time("scheduled_at", expired.ScheduledAt),
+				slog.Duration("max_age", s.maxAge))
+			continue
+		}
+
 		attempted, err := s.startSendAttempt(msg.ID)
 		if err != nil {
 			return fmt.Errorf("failed start send attempt for outbox message %d: %w", msg.ID, err)
@@ -235,6 +251,29 @@ func (s *Service) loadDueMessages(now time.Time) ([]Message, error) {
 
 	sortMessages(messages)
 	return messages, nil
+}
+
+func (s *Service) failExpiredMessage(id uint64, now time.Time) (Message, error) {
+	var expired Message
+
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		msg, bucket, err := s.loadMessageForUpdate(tx, id)
+		if err != nil {
+			return err
+		}
+
+		expired, err = msg.MarkExpired(now, s.maxAge)
+		if err != nil {
+			return err
+		}
+
+		return storeMessage(bucket, expired)
+	})
+	if err != nil {
+		return Message{}, err
+	}
+
+	return expired, nil
 }
 
 func (s *Service) startSendAttempt(id uint64) (Message, error) {

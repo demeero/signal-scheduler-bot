@@ -167,6 +167,31 @@ func (m Message) IsDue(now time.Time) bool {
 	return !m.ScheduledAt.UTC().After(now.UTC())
 }
 
+func (m Message) IsExpired(now time.Time, maxAge time.Duration) bool {
+	if !m.IsDue(now) {
+		return false
+	}
+
+	return now.UTC().Sub(m.ScheduledAt.UTC()) > maxAge
+}
+
+func (m Message) MarkExpired(now time.Time, maxAge time.Duration) (Message, error) {
+	if m.Status != MessageStatusPending && m.Status != MessageStatusRetry {
+		return Message{}, fmt.Errorf("%w: outbox message %d status is %s", errbrick.ErrConflict, m.ID, m.Status)
+	}
+	if maxAge <= 0 {
+		return Message{}, fmt.Errorf("%w: maxAge must be positive", errbrick.ErrInvalidData)
+	}
+	if !m.IsExpired(now, maxAge) {
+		return Message{}, fmt.Errorf("%w: outbox message %d is not expired", errbrick.ErrConflict, m.ID)
+	}
+
+	m.Status = MessageStatusFailed
+	m.LastError = fmt.Sprintf("message expired before send: scheduled at %s exceeded max age %s", m.ScheduledAt.UTC().Format(time.RFC3339), maxAge)
+	m.UpdatedAt = now.UTC()
+	return m, nil
+}
+
 func (m Message) key() []byte {
 	return outboxMessageKey(m.ID)
 }

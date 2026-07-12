@@ -257,6 +257,51 @@ func TestServiceSendDueMarksMessageFailedAtMaxAttempt(t *testing.T) {
 	require.Contains(t, stored.LastError, "still unavailable")
 }
 
+func TestServiceSendDueFailsExpiredMessageWithoutSending(t *testing.T) {
+	fixture := newServiceFixtureWithMaxAge(t, 15*time.Minute)
+
+	created, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
+		ScheduledAt:         time.Now().UTC().Add(-16 * time.Minute),
+		Recipient:           "Alice",
+		RecipientIdentifier: "+380501112233",
+		Text:                "hello",
+	})
+	require.NoError(t, err)
+
+	err = fixture.service.SendDue(t.Context())
+	require.NoError(t, err)
+
+	stored, err := loadMessageByID(t, fixture.db, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, MessageStatusFailed, stored.Status)
+	require.Zero(t, stored.Attempt)
+	require.Contains(t, stored.LastError, "message expired before send")
+
+	require.Empty(t, fixture.requests())
+}
+
+func TestServiceSendDueSendsFreshOverdueMessage(t *testing.T) {
+	fixture := newServiceFixtureWithMaxAge(t, 15*time.Minute)
+
+	created, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
+		ScheduledAt:         time.Now().UTC().Add(-10 * time.Minute),
+		Recipient:           "Alice",
+		RecipientIdentifier: "+380501112233",
+		Text:                "hello",
+	})
+	require.NoError(t, err)
+
+	err = fixture.service.SendDue(t.Context())
+	require.NoError(t, err)
+
+	stored, err := loadMessageByID(t, fixture.db, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, MessageStatusSent, stored.Status)
+	require.EqualValues(t, 1, stored.Attempt)
+
+	require.Len(t, fixture.requests(), 1)
+}
+
 func TestServiceSendDueSkipsNonDueStates(t *testing.T) {
 	fixture := newServiceFixture(t)
 
@@ -445,6 +490,12 @@ type testSendResponse struct {
 func newServiceFixture(t *testing.T, responses ...testSendResponse) *serviceFixture {
 	t.Helper()
 
+	return newServiceFixtureWithMaxAge(t, 15*time.Minute, responses...)
+}
+
+func newServiceFixtureWithMaxAge(t *testing.T, maxAge time.Duration, responses ...testSendResponse) *serviceFixture {
+	t.Helper()
+
 	db, err := bolt.Open(filepath.Join(t.TempDir(), "test.db"), 0o600, &bolt.Options{Timeout: time.Second})
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -499,7 +550,7 @@ func newServiceFixture(t *testing.T, responses ...testSendResponse) *serviceFixt
 	t.Cleanup(fixture.server.Close)
 
 	client := signaladapter.New("+380500000000", fixture.server.URL, &http.Client{Timeout: time.Second})
-	fixture.service, err = New(5, db, client)
+	fixture.service, err = New(5, maxAge, db, client)
 	require.NoError(t, err)
 
 	return fixture

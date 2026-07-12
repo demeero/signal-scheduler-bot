@@ -55,7 +55,7 @@ func run(ctx context.Context, cfg config.Config) error {
 
 	signalAdapter := signaladapter.New(cfg.Signal.Account, cfg.Signal.APIBaseURL, &http.Client{Timeout: cfg.Signal.RequestTimeout})
 
-	outboxSvc, err := outbox.New(cfg.Outbox.MaxAttempts, db, signalAdapter)
+	outboxSvc, err := outbox.New(cfg.Outbox.MaxAttempts, cfg.Outbox.MaxAge, db, signalAdapter)
 	if err != nil {
 		return fmt.Errorf("failed init outbox service: %w", err)
 	}

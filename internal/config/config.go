@@ -56,6 +56,8 @@ type Outbox struct {
 	WorkerInterval time.Duration `default:"1s" json:"worker_interval" split_words:"true"`
 	// MaxAttempts is the maximum number of send attempts.
 	MaxAttempts uint16 `default:"5" json:"max_attempts" split_words:"true"`
+	// MaxAge controls how late a due message may be before it is discarded.
+	MaxAge time.Duration `default:"15m" json:"max_age" split_words:"true"`
 }
 
 var (
