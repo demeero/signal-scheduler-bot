@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -635,7 +636,7 @@ func newServiceFixtureWithConfig(t *testing.T, maxAge, vacuumAge time.Duration, 
 
 	fixture := &serviceFixture{
 		db:        db,
-		responses: append([]testSendResponse(nil), responses...),
+		responses: slices.Clone(responses),
 	}
 
 	client := &http.Client{
@@ -697,7 +698,7 @@ func (f *serviceFixture) requests() []testSendRequest {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	return append([]testSendRequest(nil), f.requested...)
+	return slices.Clone(f.requested)
 }
 
 func loadMessageByID(t *testing.T, db *bolt.DB, id uint64) (Message, error) {
