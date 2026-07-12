@@ -227,10 +227,15 @@ func TestServiceSendDueMarksMessageRetry(t *testing.T) {
 }
 
 func TestServiceSendDueMarksMessageFailedAtMaxAttempt(t *testing.T) {
-	fixture := newServiceFixture(t, testSendResponse{
-		statusCode: http.StatusServiceUnavailable,
-		body:       "still unavailable",
-	})
+	fixture := newServiceFixture(t,
+		testSendResponse{
+			statusCode: http.StatusServiceUnavailable,
+			body:       "still unavailable",
+		},
+		testSendResponse{
+			statusCode: http.StatusCreated,
+		},
+	)
 
 	created, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
 		ScheduledAt:         time.Now().UTC().Add(-time.Minute),
@@ -256,6 +261,13 @@ func TestServiceSendDueMarksMessageFailedAtMaxAttempt(t *testing.T) {
 	require.Equal(t, MessageStatusFailed, stored.Status)
 	require.EqualValues(t, 5, stored.Attempt)
 	require.Contains(t, stored.LastError, "still unavailable")
+
+	requests := fixture.requests()
+	require.Len(t, requests, 2)
+	require.Equal(t, "+380501112233", requests[0].Recipients[0])
+	require.Equal(t, "+380500000000", requests[1].Recipients[0])
+	require.Contains(t, requests[1].Message, "Failed to deliver scheduled message")
+	require.Contains(t, requests[1].Message, "still unavailable")
 }
 
 func TestServiceSendDueFailsExpiredMessageWithoutSending(t *testing.T) {
@@ -278,7 +290,11 @@ func TestServiceSendDueFailsExpiredMessageWithoutSending(t *testing.T) {
 	require.Zero(t, stored.Attempt)
 	require.Contains(t, stored.LastError, "message expired before send")
 
-	require.Empty(t, fixture.requests())
+	requests := fixture.requests()
+	require.Len(t, requests, 1)
+	require.Equal(t, "+380500000000", requests[0].Recipients[0])
+	require.Contains(t, requests[0].Message, "Failed to deliver scheduled message")
+	require.Contains(t, requests[0].Message, "message expired before send")
 }
 
 func TestServiceSendDueSendsFreshOverdueMessage(t *testing.T) {

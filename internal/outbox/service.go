@@ -180,6 +180,13 @@ func (s *Service) SendDue(ctx context.Context) error {
 				return fmt.Errorf("failed mark expired outbox message %d: %w", msg.ID, err)
 			}
 
+			if err := s.notifyPermanentFailure(ctx, expired); err != nil {
+				logger.Error("failed notify outbox permanent failure",
+					slog.Uint64("msg_id", expired.ID),
+					slog.String("recipient", expired.Recipient),
+					slog.String("err", err.Error()))
+			}
+
 			logger.Error("outbox message expired before send",
 				slog.Uint64("msg_id", expired.ID),
 				slog.String("recipient", expired.Recipient),
@@ -223,6 +230,13 @@ func (s *Service) SendDue(ctx context.Context) error {
 		logMsg := "outbox message send retry scheduled"
 		if finalized.Status == MessageStatusFailed {
 			logMsg = "outbox message send failed permanently"
+
+			if err := s.notifyPermanentFailure(ctx, finalized); err != nil {
+				logger.Error("failed notify outbox permanent failure",
+					slog.Uint64("msg_id", finalized.ID),
+					slog.String("recipient", finalized.Recipient),
+					slog.String("err", err.Error()))
+			}
 		}
 		logger.Error(logMsg,
 			slog.Uint64("msg_id", finalized.ID),
@@ -359,6 +373,24 @@ func (s *Service) finishSendFailure(id uint64, lastErr string) (Message, error) 
 	}
 
 	return updated, nil
+}
+
+func (s *Service) notifyPermanentFailure(ctx context.Context, msg Message) error {
+	text := fmt.Sprintf(
+		"Failed to deliver scheduled message %d to %s. Status: %s. Error: %s. Scheduled at: %s. Text: %s",
+		msg.ID,
+		msg.Recipient,
+		msg.Status,
+		msg.LastError,
+		msg.ScheduledAt.UTC().Format(time.RFC3339),
+		msg.Text,
+	)
+
+	if err := s.signalClient.SendSelfMessage(ctx, text); err != nil {
+		return fmt.Errorf("send self failure notification: %w", err)
+	}
+
+	return nil
 }
 
 func (s *Service) rollbackSendAttempt(previous Message) error {
