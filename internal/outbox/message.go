@@ -1,4 +1,4 @@
-package outbound
+package outbox
 
 import (
 	"encoding/binary"
@@ -70,10 +70,10 @@ func newMessage(id uint64, scheduledAt time.Time, recipient, recipientIdentifier
 
 func (m Message) Cancel() (Message, error) {
 	if m.Status != MessageStatusPending {
-		return Message{}, fmt.Errorf("%w: outbound message %d status is %s", errbrick.ErrConflict, m.ID, m.Status)
+		return Message{}, fmt.Errorf("%w: outbox message %d status is %s", errbrick.ErrConflict, m.ID, m.Status)
 	}
 	if !m.ScheduledAt.UTC().After(time.Now().UTC()) {
-		return Message{}, fmt.Errorf("%w: outbound message %d is already due", errbrick.ErrConflict, m.ID)
+		return Message{}, fmt.Errorf("%w: outbox message %d is already due", errbrick.ErrConflict, m.ID)
 	}
 
 	m.Status = MessageStatusCancelled
@@ -83,10 +83,10 @@ func (m Message) Cancel() (Message, error) {
 
 func (m Message) StartSendAttempt() (Message, error) {
 	if m.Status != MessageStatusPending && m.Status != MessageStatusRetry {
-		return Message{}, fmt.Errorf("%w: outbound message %d status is %s", errbrick.ErrConflict, m.ID, m.Status)
+		return Message{}, fmt.Errorf("%w: outbox message %d status is %s", errbrick.ErrConflict, m.ID, m.Status)
 	}
 	if m.Attempt >= m.MaxAttempts {
-		return Message{}, fmt.Errorf("%w: outbound message %d reached max attempts", errbrick.ErrConflict, m.ID)
+		return Message{}, fmt.Errorf("%w: outbox message %d reached max attempts", errbrick.ErrConflict, m.ID)
 	}
 
 	m.Attempt++
@@ -96,13 +96,13 @@ func (m Message) StartSendAttempt() (Message, error) {
 
 func (m Message) MarkSent() (Message, error) {
 	if m.Status != MessageStatusPending && m.Status != MessageStatusRetry {
-		return Message{}, fmt.Errorf("%w: outbound message %d status is %s", errbrick.ErrConflict, m.ID, m.Status)
+		return Message{}, fmt.Errorf("%w: outbox message %d status is %s", errbrick.ErrConflict, m.ID, m.Status)
 	}
 	if m.Attempt == 0 {
-		return Message{}, fmt.Errorf("%w: outbound message %d has no send attempts", errbrick.ErrConflict, m.ID)
+		return Message{}, fmt.Errorf("%w: outbox message %d has no send attempts", errbrick.ErrConflict, m.ID)
 	}
 	if m.Attempt > m.MaxAttempts {
-		return Message{}, fmt.Errorf("%w: outbound message %d exceeded max attempts", errbrick.ErrConflict, m.ID)
+		return Message{}, fmt.Errorf("%w: outbox message %d exceeded max attempts", errbrick.ErrConflict, m.ID)
 	}
 
 	m.Status = MessageStatusSent
@@ -113,18 +113,18 @@ func (m Message) MarkSent() (Message, error) {
 
 func (m Message) MarkRetry(lastErr string) (Message, error) {
 	if m.Status != MessageStatusPending && m.Status != MessageStatusRetry {
-		return Message{}, fmt.Errorf("%w: outbound message %d status is %s", errbrick.ErrConflict, m.ID, m.Status)
+		return Message{}, fmt.Errorf("%w: outbox message %d status is %s", errbrick.ErrConflict, m.ID, m.Status)
 	}
 	if m.Attempt == 0 {
-		return Message{}, fmt.Errorf("%w: outbound message %d has no send attempts", errbrick.ErrConflict, m.ID)
+		return Message{}, fmt.Errorf("%w: outbox message %d has no send attempts", errbrick.ErrConflict, m.ID)
 	}
 	if m.Attempt >= m.MaxAttempts {
-		return Message{}, fmt.Errorf("%w: outbound message %d reached max attempts", errbrick.ErrConflict, m.ID)
+		return Message{}, fmt.Errorf("%w: outbox message %d reached max attempts", errbrick.ErrConflict, m.ID)
 	}
 
 	lastErr = strings.TrimSpace(lastErr)
 	if lastErr == "" {
-		return Message{}, fmt.Errorf("%w: outbound message %d last error empty", errbrick.ErrInvalidData, m.ID)
+		return Message{}, fmt.Errorf("%w: outbox message %d last error empty", errbrick.ErrInvalidData, m.ID)
 	}
 
 	m.Status = MessageStatusRetry
@@ -135,18 +135,18 @@ func (m Message) MarkRetry(lastErr string) (Message, error) {
 
 func (m Message) MarkFailed(lastErr string) (Message, error) {
 	if m.Status != MessageStatusPending && m.Status != MessageStatusRetry {
-		return Message{}, fmt.Errorf("%w: outbound message %d status is %s", errbrick.ErrConflict, m.ID, m.Status)
+		return Message{}, fmt.Errorf("%w: outbox message %d status is %s", errbrick.ErrConflict, m.ID, m.Status)
 	}
 	if m.Attempt == 0 {
-		return Message{}, fmt.Errorf("%w: outbound message %d has no send attempts", errbrick.ErrConflict, m.ID)
+		return Message{}, fmt.Errorf("%w: outbox message %d has no send attempts", errbrick.ErrConflict, m.ID)
 	}
 	if m.Attempt < m.MaxAttempts {
-		return Message{}, fmt.Errorf("%w: outbound message %d can still retry", errbrick.ErrConflict, m.ID)
+		return Message{}, fmt.Errorf("%w: outbox message %d can still retry", errbrick.ErrConflict, m.ID)
 	}
 
 	lastErr = strings.TrimSpace(lastErr)
 	if lastErr == "" {
-		return Message{}, fmt.Errorf("%w: outbound message %d last error empty", errbrick.ErrInvalidData, m.ID)
+		return Message{}, fmt.Errorf("%w: outbox message %d last error empty", errbrick.ErrInvalidData, m.ID)
 	}
 
 	m.Status = MessageStatusFailed
@@ -168,10 +168,10 @@ func (m Message) IsDue(now time.Time) bool {
 }
 
 func (m Message) key() []byte {
-	return outboundMessageKey(m.ID)
+	return outboxMessageKey(m.ID)
 }
 
-func outboundMessageKey(id uint64) []byte {
+func outboxMessageKey(id uint64) []byte {
 	key := make([]byte, 8)
 	binary.BigEndian.PutUint64(key, id)
 

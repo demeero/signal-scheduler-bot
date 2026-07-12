@@ -18,7 +18,7 @@ import (
 	"github.com/demeero/signal-scheduler-bot/internal/bot"
 	"github.com/demeero/signal-scheduler-bot/internal/config"
 	"github.com/demeero/signal-scheduler-bot/internal/logbrick"
-	"github.com/demeero/signal-scheduler-bot/internal/outbound"
+	"github.com/demeero/signal-scheduler-bot/internal/outbox"
 	"github.com/demeero/signal-scheduler-bot/internal/signaladapter"
 	bolt "go.etcd.io/bbolt"
 )
@@ -50,12 +50,12 @@ func run(ctx context.Context, cfg config.Config) error {
 
 	signalAdapter := newSignalAdapter(cfg)
 
-	outboundSvc, err := outbound.New(cfg.Outbox.MaxAttempts, db, signalAdapter)
+	outboxSvc, err := outbox.New(cfg.Outbox.MaxAttempts, db, signalAdapter)
 	if err != nil {
-		return fmt.Errorf("init outbound adapter: %w", err)
+		return fmt.Errorf("init outbox service: %w", err)
 	}
 
-	botPoller := bot.New(cfg.Signal.Account, location, signalAdapter, outboundSvc)
+	botPoller := bot.New(cfg.Signal.Account, location, signalAdapter, outboxSvc)
 
 	go func() {
 		slog.Info("started inbound polling worker", "interval", cfg.Bot.PollInterval)
@@ -74,15 +74,15 @@ func run(ctx context.Context, cfg config.Config) error {
 	}()
 
 	go func() {
-		slog.Info("started outbound send worker", "interval", cfg.Outbox.WorkerInterval)
+		slog.Info("started outbox send worker", "interval", cfg.Outbox.WorkerInterval)
 		for {
-			if err := outboundSvc.SendDue(ctx); err != nil {
-				slog.Error("failed send due outbound messages", "err", err)
+			if err := outboxSvc.SendDue(ctx); err != nil {
+				slog.Error("failed send due outbox messages", "err", err)
 			}
 
 			select {
 			case <-ctx.Done():
-				slog.Info("ctx done received - finish outbound sending")
+				slog.Info("ctx done received - finish outbox sending")
 				return
 			case <-time.After(cfg.Outbox.WorkerInterval):
 			}

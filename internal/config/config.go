@@ -42,7 +42,7 @@ type Signal struct {
 	APIBaseURL string `default:"http://localhost:18080" json:"api_base_url" required:"true" split_words:"true"`
 	// Account is the Signal account used by the scheduler.
 	Account string `json:"-" required:"true"`
-	// RequestTimeout limits a single outbound Signal API request.
+	// RequestTimeout limits a single Signal send request.
 	RequestTimeout time.Duration `default:"30s" json:"request_timeout" split_words:"true"`
 }
 

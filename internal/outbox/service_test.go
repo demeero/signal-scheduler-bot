@@ -1,4 +1,4 @@
-package outbound
+package outbox
 
 import (
 	"encoding/json"
@@ -18,7 +18,7 @@ import (
 func TestServiceCreateMessageInitializesDeliveryState(t *testing.T) {
 	fixture := newServiceFixture(t)
 
-	created, err := fixture.service.CreateMessage(t.Context(), CreateOutboundMessageParams{
+	created, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
 		ScheduledAt:         time.Now().UTC().Add(time.Hour),
 		Recipient:           "Future",
 		RecipientIdentifier: "future-id",
@@ -42,7 +42,7 @@ func TestServiceLoadUpcomingMessages(t *testing.T) {
 	firstScheduledAt := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
 	secondScheduledAt := firstScheduledAt.Add(time.Hour)
 
-	first, err := fixture.service.CreateMessage(t.Context(), CreateOutboundMessageParams{
+	first, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
 		ScheduledAt:         secondScheduledAt,
 		Recipient:           "second-by-time",
 		RecipientIdentifier: "second-by-time-id",
@@ -50,7 +50,7 @@ func TestServiceLoadUpcomingMessages(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	second, err := fixture.service.CreateMessage(t.Context(), CreateOutboundMessageParams{
+	second, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
 		ScheduledAt:         firstScheduledAt,
 		Recipient:           "first-by-time",
 		RecipientIdentifier: "first-by-time-id",
@@ -58,7 +58,7 @@ func TestServiceLoadUpcomingMessages(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = fixture.service.CreateMessage(t.Context(), CreateOutboundMessageParams{
+	_, err = fixture.service.CreateMessage(t.Context(), CreateMessageParams{
 		ScheduledAt:         time.Now().UTC().Add(-time.Minute),
 		Recipient:           "past",
 		RecipientIdentifier: "past-id",
@@ -82,7 +82,7 @@ func TestServiceLoadUpcomingMessages(t *testing.T) {
 func TestServiceCancelMessage(t *testing.T) {
 	fixture := newServiceFixture(t)
 
-	created, err := fixture.service.CreateMessage(t.Context(), CreateOutboundMessageParams{
+	created, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
 		ScheduledAt:         time.Now().UTC().Add(time.Hour),
 		Recipient:           "Future",
 		RecipientIdentifier: "future-id",
@@ -115,7 +115,7 @@ func TestServiceCancelMessageReturnsNotFound(t *testing.T) {
 func TestServiceCancelMessageReturnsConflictForAlreadyCancelledMessage(t *testing.T) {
 	fixture := newServiceFixture(t)
 
-	created, err := fixture.service.CreateMessage(t.Context(), CreateOutboundMessageParams{
+	created, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
 		ScheduledAt:         time.Now().UTC().Add(time.Hour),
 		Recipient:           "Future",
 		RecipientIdentifier: "future-id",
@@ -134,7 +134,7 @@ func TestServiceCancelMessageReturnsConflictForAlreadyCancelledMessage(t *testin
 func TestServiceCancelMessageReturnsConflictForDueMessage(t *testing.T) {
 	fixture := newServiceFixture(t)
 
-	created, err := fixture.service.CreateMessage(t.Context(), CreateOutboundMessageParams{
+	created, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
 		ScheduledAt:         time.Now().UTC().Add(-time.Minute),
 		Recipient:           "Past",
 		RecipientIdentifier: "past-id",
@@ -150,7 +150,7 @@ func TestServiceCancelMessageReturnsConflictForDueMessage(t *testing.T) {
 func TestServiceLoadUpcomingMessagesExcludesCancelledMessages(t *testing.T) {
 	fixture := newServiceFixture(t)
 
-	cancelled, err := fixture.service.CreateMessage(t.Context(), CreateOutboundMessageParams{
+	cancelled, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
 		ScheduledAt:         time.Now().UTC().Add(2 * time.Hour),
 		Recipient:           "Cancelled",
 		RecipientIdentifier: "cancelled-id",
@@ -158,7 +158,7 @@ func TestServiceLoadUpcomingMessagesExcludesCancelledMessages(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	active, err := fixture.service.CreateMessage(t.Context(), CreateOutboundMessageParams{
+	active, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
 		ScheduledAt:         time.Now().UTC().Add(3 * time.Hour),
 		Recipient:           "Active",
 		RecipientIdentifier: "active-id",
@@ -178,7 +178,7 @@ func TestServiceLoadUpcomingMessagesExcludesCancelledMessages(t *testing.T) {
 func TestServiceSendDueMarksMessageSent(t *testing.T) {
 	fixture := newServiceFixture(t)
 
-	created, err := fixture.service.CreateMessage(t.Context(), CreateOutboundMessageParams{
+	created, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
 		ScheduledAt:         time.Now().UTC().Add(-time.Minute),
 		Recipient:           "Alice",
 		RecipientIdentifier: "+380501112233",
@@ -207,7 +207,7 @@ func TestServiceSendDueMarksMessageRetry(t *testing.T) {
 		body:       "temporarily unavailable",
 	})
 
-	created, err := fixture.service.CreateMessage(t.Context(), CreateOutboundMessageParams{
+	created, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
 		ScheduledAt:         time.Now().UTC().Add(-time.Minute),
 		Recipient:           "Alice",
 		RecipientIdentifier: "+380501112233",
@@ -231,7 +231,7 @@ func TestServiceSendDueMarksMessageFailedAtMaxAttempt(t *testing.T) {
 		body:       "still unavailable",
 	})
 
-	created, err := fixture.service.CreateMessage(t.Context(), CreateOutboundMessageParams{
+	created, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
 		ScheduledAt:         time.Now().UTC().Add(-time.Minute),
 		Recipient:           "Alice",
 		RecipientIdentifier: "+380501112233",
@@ -260,7 +260,7 @@ func TestServiceSendDueMarksMessageFailedAtMaxAttempt(t *testing.T) {
 func TestServiceSendDueSkipsNonDueStates(t *testing.T) {
 	fixture := newServiceFixture(t)
 
-	futurePending, err := fixture.service.CreateMessage(t.Context(), CreateOutboundMessageParams{
+	futurePending, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
 		ScheduledAt:         time.Now().UTC().Add(time.Hour),
 		Recipient:           "Future",
 		RecipientIdentifier: "future-id",
@@ -268,7 +268,7 @@ func TestServiceSendDueSkipsNonDueStates(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	cancelled, err := fixture.service.CreateMessage(t.Context(), CreateOutboundMessageParams{
+	cancelled, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
 		ScheduledAt:         time.Now().UTC().Add(-time.Minute),
 		Recipient:           "Cancelled",
 		RecipientIdentifier: "cancelled-id",
@@ -276,7 +276,7 @@ func TestServiceSendDueSkipsNonDueStates(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	sent, err := fixture.service.CreateMessage(t.Context(), CreateOutboundMessageParams{
+	sent, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
 		ScheduledAt:         time.Now().UTC().Add(-time.Minute),
 		Recipient:           "Sent",
 		RecipientIdentifier: "sent-id",
@@ -284,7 +284,7 @@ func TestServiceSendDueSkipsNonDueStates(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	failed, err := fixture.service.CreateMessage(t.Context(), CreateOutboundMessageParams{
+	failed, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
 		ScheduledAt:         time.Now().UTC().Add(-time.Minute),
 		Recipient:           "Failed",
 		RecipientIdentifier: "failed-id",
@@ -292,7 +292,7 @@ func TestServiceSendDueSkipsNonDueStates(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	due, err := fixture.service.CreateMessage(t.Context(), CreateOutboundMessageParams{
+	due, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
 		ScheduledAt:         time.Now().UTC().Add(-time.Minute),
 		Recipient:           "Due",
 		RecipientIdentifier: "due-id",
@@ -342,7 +342,7 @@ func TestServiceSendDueContinuesBatchAfterSendFailure(t *testing.T) {
 		testSendResponse{statusCode: http.StatusCreated},
 	)
 
-	first, err := fixture.service.CreateMessage(t.Context(), CreateOutboundMessageParams{
+	first, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
 		ScheduledAt:         time.Now().UTC().Add(-2 * time.Minute),
 		Recipient:           "First",
 		RecipientIdentifier: "first-id",
@@ -350,7 +350,7 @@ func TestServiceSendDueContinuesBatchAfterSendFailure(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	second, err := fixture.service.CreateMessage(t.Context(), CreateOutboundMessageParams{
+	second, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
 		ScheduledAt:         time.Now().UTC().Add(-time.Minute),
 		Recipient:           "Second",
 		RecipientIdentifier: "second-id",
@@ -517,10 +517,10 @@ func loadMessageByID(t *testing.T, db *bolt.DB, id uint64) (Message, error) {
 
 	var msg Message
 	err := db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("outbound_messages"))
+		bucket := tx.Bucket(outboxMessagesBucket)
 		require.NotNil(t, bucket)
 
-		value := bucket.Get(outboundMessageKey(id))
+		value := bucket.Get(outboxMessageKey(id))
 		if value == nil {
 			return errbrick.ErrNotFound
 		}
@@ -535,10 +535,10 @@ func updateStoredMessage(t *testing.T, db *bolt.DB, id uint64, fn func(Message) 
 	t.Helper()
 
 	return db.Update(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("outbound_messages"))
+		bucket := tx.Bucket(outboxMessagesBucket)
 		require.NotNil(t, bucket)
 
-		value := bucket.Get(outboundMessageKey(id))
+		value := bucket.Get(outboxMessageKey(id))
 		if value == nil {
 			return errbrick.ErrNotFound
 		}
@@ -555,6 +555,6 @@ func updateStoredMessage(t *testing.T, db *bolt.DB, id uint64, fn func(Message) 
 			return err
 		}
 
-		return bucket.Put(outboundMessageKey(id), data)
+		return bucket.Put(outboxMessageKey(id), data)
 	})
 }

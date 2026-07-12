@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/demeero/signal-scheduler-bot/internal/errbrick"
-	"github.com/demeero/signal-scheduler-bot/internal/outbound"
+	"github.com/demeero/signal-scheduler-bot/internal/outbox"
 	"github.com/demeero/signal-scheduler-bot/internal/signaladapter"
 	"github.com/stretchr/testify/require"
 	bolt "go.etcd.io/bbolt"
@@ -22,8 +22,8 @@ func TestPollerHandleUpcomingCmdNoUpcomingMessages(t *testing.T) {
 	location, err := time.LoadLocation("Europe/Kyiv")
 	require.NoError(t, err)
 
-	fixture := newTestOutboundFixture(t)
-	_, err = fixture.service.CreateMessage(t.Context(), outbound.CreateOutboundMessageParams{
+	fixture := newTestOutboxFixture(t)
+	_, err = fixture.service.CreateMessage(t.Context(), outbox.CreateMessageParams{
 		ScheduledAt:         time.Now().UTC().Add(-time.Minute),
 		Recipient:           "+380500000000",
 		RecipientIdentifier: "+380500000000",
@@ -49,10 +49,10 @@ func TestPollerHandleUpcomingCmdListsFuturePendingMessages(t *testing.T) {
 	location, err := time.LoadLocation("Europe/Kyiv")
 	require.NoError(t, err)
 
-	fixture := newTestOutboundFixture(t)
+	fixture := newTestOutboxFixture(t)
 	now := time.Now().UTC()
 
-	later, err := fixture.service.CreateMessage(t.Context(), outbound.CreateOutboundMessageParams{
+	later, err := fixture.service.CreateMessage(t.Context(), outbox.CreateMessageParams{
 		ScheduledAt:         now.Add(3 * time.Hour),
 		Recipient:           "Later",
 		RecipientIdentifier: "later-id",
@@ -60,7 +60,7 @@ func TestPollerHandleUpcomingCmdListsFuturePendingMessages(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	earlier, err := fixture.service.CreateMessage(t.Context(), outbound.CreateOutboundMessageParams{
+	earlier, err := fixture.service.CreateMessage(t.Context(), outbox.CreateMessageParams{
 		ScheduledAt:         now.Add(90 * time.Minute),
 		Recipient:           "Earlier",
 		RecipientIdentifier: "earlier-id",
@@ -68,7 +68,7 @@ func TestPollerHandleUpcomingCmdListsFuturePendingMessages(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	sameTime, err := fixture.service.CreateMessage(t.Context(), outbound.CreateOutboundMessageParams{
+	sameTime, err := fixture.service.CreateMessage(t.Context(), outbox.CreateMessageParams{
 		ScheduledAt:         earlier.ScheduledAt,
 		Recipient:           "SameTime",
 		RecipientIdentifier: "same-time-id",
@@ -76,7 +76,7 @@ func TestPollerHandleUpcomingCmdListsFuturePendingMessages(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = fixture.service.CreateMessage(t.Context(), outbound.CreateOutboundMessageParams{
+	_, err = fixture.service.CreateMessage(t.Context(), outbox.CreateMessageParams{
 		ScheduledAt:         now.Add(-5 * time.Minute),
 		Recipient:           "Past",
 		RecipientIdentifier: "past-id",
@@ -107,8 +107,8 @@ func TestPollerHandleUpcomingCmdHidesOverduePendingMessages(t *testing.T) {
 	location, err := time.LoadLocation("Europe/Kyiv")
 	require.NoError(t, err)
 
-	fixture := newTestOutboundFixture(t)
-	_, err = fixture.service.CreateMessage(t.Context(), outbound.CreateOutboundMessageParams{
+	fixture := newTestOutboxFixture(t)
+	_, err = fixture.service.CreateMessage(t.Context(), outbox.CreateMessageParams{
 		ScheduledAt:         time.Now().UTC().Add(-30 * time.Second),
 		Recipient:           "Overdue",
 		RecipientIdentifier: "overdue-id",
@@ -137,8 +137,8 @@ func TestPollerHandleCancelCmd(t *testing.T) {
 	location, err := time.LoadLocation("Europe/Kyiv")
 	require.NoError(t, err)
 
-	fixture := newTestOutboundFixture(t)
-	created, err := fixture.service.CreateMessage(t.Context(), outbound.CreateOutboundMessageParams{
+	fixture := newTestOutboxFixture(t)
+	created, err := fixture.service.CreateMessage(t.Context(), outbox.CreateMessageParams{
 		ScheduledAt:         time.Now().UTC().Add(time.Hour),
 		Recipient:           "Future",
 		RecipientIdentifier: "future-id",
@@ -153,7 +153,7 @@ func TestPollerHandleCancelCmd(t *testing.T) {
 
 	stored, err := loadStoredMessageByID(t, fixture.db, created.ID)
 	require.NoError(t, err)
-	require.Equal(t, outbound.MessageStatusCancelled, stored.Status)
+	require.Equal(t, outbox.MessageStatusCancelled, stored.Status)
 
 	messages, err := loadAllMessages(t, fixture.db)
 	require.NoError(t, err)
@@ -168,21 +168,21 @@ func TestPollerHandleCancelCmdReturnsNotFound(t *testing.T) {
 	location, err := time.LoadLocation("Europe/Kyiv")
 	require.NoError(t, err)
 
-	fixture := newTestOutboundFixture(t)
+	fixture := newTestOutboxFixture(t)
 	poller := New("+380999999999", location, nil, fixture.service)
 
 	err = poller.handleCancelCmd(t.Context(), cancelCommand{id: 42})
 	require.Error(t, err)
 	require.ErrorIs(t, err, errbrick.ErrNotFound)
-	require.ErrorContains(t, err, "failed cancel outbound message")
+	require.ErrorContains(t, err, "failed cancel outbox message")
 }
 
 func TestPollerHandleCancelCmdReturnsConflict(t *testing.T) {
 	location, err := time.LoadLocation("Europe/Kyiv")
 	require.NoError(t, err)
 
-	fixture := newTestOutboundFixture(t)
-	created, err := fixture.service.CreateMessage(t.Context(), outbound.CreateOutboundMessageParams{
+	fixture := newTestOutboxFixture(t)
+	created, err := fixture.service.CreateMessage(t.Context(), outbox.CreateMessageParams{
 		ScheduledAt:         time.Now().UTC().Add(-time.Minute),
 		Recipient:           "Past",
 		RecipientIdentifier: "past-id",
@@ -195,15 +195,15 @@ func TestPollerHandleCancelCmdReturnsConflict(t *testing.T) {
 	err = poller.handleCancelCmd(t.Context(), cancelCommand{id: created.ID})
 	require.Error(t, err)
 	require.ErrorIs(t, err, errbrick.ErrConflict)
-	require.ErrorContains(t, err, "failed cancel outbound message")
+	require.ErrorContains(t, err, "failed cancel outbox message")
 }
 
-type testOutboundFixture struct {
+type testOutboxFixture struct {
 	db      *bolt.DB
-	service *outbound.Service
+	service *outbox.Service
 }
 
-func newTestOutboundFixture(t *testing.T) testOutboundFixture {
+func newTestOutboxFixture(t *testing.T) testOutboxFixture {
 	t.Helper()
 
 	db, err := bolt.Open(filepath.Join(t.TempDir(), "test.db"), 0o600, &bolt.Options{Timeout: time.Second})
@@ -229,16 +229,16 @@ func newTestOutboundFixture(t *testing.T) testOutboundFixture {
 
 	signalClient := signaladapter.New("+380999999999", server.URL, &http.Client{Timeout: time.Second})
 
-	service, err := outbound.New(5, db, signalClient)
+	service, err := outbox.New(5, db, signalClient)
 	require.NoError(t, err)
 
-	return testOutboundFixture{
+	return testOutboxFixture{
 		db:      db,
 		service: service,
 	}
 }
 
-func formatUpcomingLine(location *time.Location, msg outbound.Message) string {
+func formatUpcomingLine(location *time.Location, msg outbox.Message) string {
 	return strings.Join([]string{
 		strconv.FormatUint(msg.ID, 10),
 		msg.ScheduledAt.In(location).Format("2006-01-02 15:04") + " (" + location.String() + ")",
@@ -247,16 +247,16 @@ func formatUpcomingLine(location *time.Location, msg outbound.Message) string {
 	}, " | ")
 }
 
-func loadAllMessages(t *testing.T, db *bolt.DB) ([]outbound.Message, error) {
+func loadAllMessages(t *testing.T, db *bolt.DB) ([]outbox.Message, error) {
 	t.Helper()
 
-	messages := make([]outbound.Message, 0)
+	messages := make([]outbox.Message, 0)
 	err := db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("outbound_messages"))
+		bucket := tx.Bucket([]byte("outbox_messages"))
 		require.NotNil(t, bucket)
 
 		return bucket.ForEach(func(_, value []byte) error {
-			var msg outbound.Message
+			var msg outbox.Message
 			if err := json.Unmarshal(value, &msg); err != nil {
 				return err
 			}
@@ -269,12 +269,12 @@ func loadAllMessages(t *testing.T, db *bolt.DB) ([]outbound.Message, error) {
 	return messages, err
 }
 
-func loadStoredMessageByID(t *testing.T, db *bolt.DB, id uint64) (outbound.Message, error) {
+func loadStoredMessageByID(t *testing.T, db *bolt.DB, id uint64) (outbox.Message, error) {
 	t.Helper()
 
-	var msg outbound.Message
+	var msg outbox.Message
 	err := db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("outbound_messages"))
+		bucket := tx.Bucket([]byte("outbox_messages"))
 		require.NotNil(t, bucket)
 
 		key := make([]byte, 8)

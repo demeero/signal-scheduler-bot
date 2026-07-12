@@ -8,24 +8,24 @@ import (
 
 	"github.com/demeero/signal-scheduler-bot/internal/errbrick"
 	"github.com/demeero/signal-scheduler-bot/internal/logbrick"
-	"github.com/demeero/signal-scheduler-bot/internal/outbound"
+	"github.com/demeero/signal-scheduler-bot/internal/outbox"
 	"github.com/demeero/signal-scheduler-bot/internal/signaladapter"
 )
 
 type Poller struct {
 	signalClient *signaladapter.SignalAdapter
 	parser       *parser
-	outboundSvc  *outbound.Service
+	outboxSvc    *outbox.Service
 	location     *time.Location
 	account      string
 }
 
-func New(account string, location *time.Location, signalClient *signaladapter.SignalAdapter, outboundSvc *outbound.Service) *Poller {
+func New(account string, location *time.Location, signalClient *signaladapter.SignalAdapter, outboxSvc *outbox.Service) *Poller {
 	return &Poller{
 		account:      account,
 		signalClient: signalClient,
 		parser:       newParser(location),
-		outboundSvc:  outboundSvc,
+		outboxSvc:    outboxSvc,
 		location:     location,
 	}
 }
@@ -57,7 +57,7 @@ func (p *Poller) Poll(ctx context.Context) error {
 		cmd, err := p.parser.Parse(body, time.Now().UTC())
 		if err != nil {
 			msgLogger.Error("failed parse command", "err", err)
-			p.queueSelfOutboundErr(ctx, err)
+			p.queueSelfOutboxErr(ctx, err)
 			continue
 		}
 
@@ -65,7 +65,7 @@ func (p *Poller) Poll(ctx context.Context) error {
 
 		if err := p.handleCmd(ctx, cmd); err != nil {
 			msgLogger.Error("failed handle command", "err", err)
-			p.queueSelfOutboundErr(ctx, err)
+			p.queueSelfOutboxErr(ctx, err)
 			continue
 		}
 	}
@@ -89,9 +89,9 @@ func (p *Poller) handleCmd(ctx context.Context, cmd parsedCommand) error {
 }
 
 func (p *Poller) handleUpcomingCmd(ctx context.Context) error {
-	messages, err := p.outboundSvc.LoadUpcomingMessages(ctx)
+	messages, err := p.outboxSvc.LoadUpcomingMessages(ctx)
 	if err != nil {
-		return fmt.Errorf("failed list outbound messages: %w", err)
+		return fmt.Errorf("failed list outbox messages: %w", err)
 	}
 
 	lines := make([]string, 0, len(messages)+1)
@@ -107,16 +107,16 @@ func (p *Poller) handleUpcomingCmd(ctx context.Context) error {
 		))
 	}
 
-	return p.queueSelfOutboundMessage(ctx, strings.Join(lines, "\n"))
+	return p.queueSelfOutboxMessage(ctx, strings.Join(lines, "\n"))
 }
 
 func (p *Poller) handleCancelCmd(ctx context.Context, cmd cancelCommand) error {
-	_, err := p.outboundSvc.CancelMessage(ctx, cmd.id)
+	_, err := p.outboxSvc.CancelMessage(ctx, cmd.id)
 	if err != nil {
-		return fmt.Errorf("failed cancel outbound message: %w", err)
+		return fmt.Errorf("failed cancel outbox message: %w", err)
 	}
 
-	return p.queueSelfOutboundMessage(ctx, fmt.Sprintf("Cancelled message %d.", cmd.id))
+	return p.queueSelfOutboxMessage(ctx, fmt.Sprintf("Cancelled message %d.", cmd.id))
 }
 
 func (p *Poller) handleScheduleCmd(ctx context.Context, cmd scheduleCommand) error {
@@ -125,20 +125,20 @@ func (p *Poller) handleScheduleCmd(ctx context.Context, cmd scheduleCommand) err
 		return fmt.Errorf("failed resolve recipient: %w", err)
 	}
 
-	params := outbound.CreateOutboundMessageParams{
+	params := outbox.CreateMessageParams{
 		ScheduledAt:         cmd.When,
 		Recipient:           cmd.Recipient,
 		RecipientIdentifier: recipientIdentifier,
 		Text:                cmd.Text,
 	}
-	outboundMessage, err := p.outboundSvc.CreateMessage(ctx, params)
+	outboxMessage, err := p.outboxSvc.CreateMessage(ctx, params)
 	if err != nil {
-		return fmt.Errorf("failed create outbound message: %w", err)
+		return fmt.Errorf("failed create outbox message: %w", err)
 	}
 
-	return p.queueSelfOutboundMessage(
+	return p.queueSelfOutboxMessage(
 		ctx,
-		fmt.Sprintf("Scheduled message %d for %s (%s) to %s.", outboundMessage.ID, cmd.OriginalLocalTime, cmd.Timezone, cmd.Recipient),
+		fmt.Sprintf("Scheduled message %d for %s (%s) to %s.", outboxMessage.ID, cmd.OriginalLocalTime, cmd.Timezone, cmd.Recipient),
 	)
 }
 
@@ -159,27 +159,27 @@ func (p *Poller) handleHelpCmd(ctx context.Context) error {
 		"",
 		"/help",
 	}, "\n")
-	return p.queueSelfOutboundMessage(ctx, helpText)
+	return p.queueSelfOutboxMessage(ctx, helpText)
 }
 
-func (p *Poller) queueSelfOutboundErr(ctx context.Context, err error) {
-	if err := p.queueSelfOutboundMessage(ctx, err.Error()); err != nil {
-		logbrick.FromCtx(ctx).Error("failed to queue self error message", "err", err)
+func (p *Poller) queueSelfOutboxErr(ctx context.Context, err error) {
+	if err := p.queueSelfOutboxMessage(ctx, err.Error()); err != nil {
+		logbrick.FromCtx(ctx).Error("failed to queue self outbox error message", "err", err)
 	}
 }
 
-func (p *Poller) queueSelfOutboundMessage(ctx context.Context, text string) error {
-	params := outbound.CreateOutboundMessageParams{
+func (p *Poller) queueSelfOutboxMessage(ctx context.Context, text string) error {
+	params := outbox.CreateMessageParams{
 		ScheduledAt:         time.Now().UTC(),
 		Recipient:           p.account,
 		RecipientIdentifier: p.account,
 		Text:                text,
 	}
-	if _, err := p.outboundSvc.CreateMessage(ctx, params); err != nil {
+	if _, err := p.outboxSvc.CreateMessage(ctx, params); err != nil {
 		return fmt.Errorf("failed queue self message: %w", err)
 	}
 
-	logbrick.FromCtx(ctx).Debug("self message queued", "msg", text)
+	logbrick.FromCtx(ctx).Debug("self outbox message queued", "msg", text)
 
 	return nil
 }
