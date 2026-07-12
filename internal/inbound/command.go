@@ -25,7 +25,7 @@ func (listCommand) Name() string {
 func (listCommand) isCommand() {}
 
 type cancelCommand struct {
-	id int64
+	id uint64
 }
 
 func (cancelCommand) Name() string {
@@ -34,11 +34,11 @@ func (cancelCommand) Name() string {
 func (cancelCommand) isCommand() {}
 
 type scheduleCommand struct {
-	whenUTC           time.Time
-	originalLocalTime string
-	timezone          string
-	recipient         string
-	message           string
+	When              time.Time
+	OriginalLocalTime string
+	Timezone          string
+	Recipient         string
+	Text              string
 }
 
 func (scheduleCommand) Name() string {

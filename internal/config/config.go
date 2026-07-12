@@ -31,7 +31,7 @@ type Log struct {
 
 type Bolt struct {
 	// Path is the BoltDB database path.
-	Path string `json:"path" required:"true"`
+	Path string `default:"./var/signal-scheduler-bot" json:"path" required:"true"`
 	// Timeout configures how long Bolt waits for a writable file lock.
 	Timeout time.Duration `default:"5s" json:"timeout"`
 }
@@ -42,7 +42,7 @@ type Signal struct {
 	// Account is the Signal account used by the scheduler.
 	Account string `json:"-" required:"true"`
 	// RequestTimeout limits a single outbound Signal API request.
-	RequestTimeout time.Duration `default:"15s" json:"request_timeout" split_words:"true"`
+	RequestTimeout time.Duration `default:"30s" json:"request_timeout" split_words:"true"`
 }
 
 type Scheduler struct {
@@ -51,7 +51,7 @@ type Scheduler struct {
 	// PollInterval controls how often the incoming poller runs.
 	PollInterval time.Duration `default:"5s" json:"poll_interval" split_words:"true"`
 	// WorkerInterval controls how often due scheduled messages are scanned.
-	WorkerInterval time.Duration `default:"5s" json:"worker_interval" split_words:"true"`
+	WorkerInterval time.Duration `default:"1s" json:"worker_interval" split_words:"true"`
 	// DefaultSendExpiry is the default expiry window for outbound Signal messages.
 	DefaultSendExpiry time.Duration `default:"30m" json:"default_send_expiry" split_words:"true"`
 	// ShutdownTimeout controls graceful shutdown waiting time.
@@ -62,7 +62,7 @@ type Retry struct {
 	// MaxAttempts is the maximum number of send attempts.
 	MaxAttempts int `default:"3" json:"max_attempts" split_words:"true"`
 	// Window is the total retry window for a scheduled message.
-	Window time.Duration `default:"5m" json:"window"`
+	Window time.Duration `default:"3m" json:"window"`
 }
 
 var (

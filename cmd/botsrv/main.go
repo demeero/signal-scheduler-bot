@@ -16,9 +16,9 @@ import (
 	_ "time/tzdata"
 
 	"github.com/demeero/signal-scheduler-bot/internal/config"
-	"github.com/demeero/signal-scheduler-bot/internal/dbadapter"
 	"github.com/demeero/signal-scheduler-bot/internal/inbound"
 	"github.com/demeero/signal-scheduler-bot/internal/logbrick"
+	"github.com/demeero/signal-scheduler-bot/internal/outbound"
 	"github.com/demeero/signal-scheduler-bot/internal/signaladapter"
 	bolt "go.etcd.io/bbolt"
 )
@@ -48,14 +48,14 @@ func run(ctx context.Context, cfg config.Config) error {
 	}
 	defer closeBoltDB(db)
 
-	outboundAdapter, err := dbadapter.NewOutboundAdapter(db)
+	outboundSvc, err := outbound.New(db)
 	if err != nil {
 		return fmt.Errorf("init outbound adapter: %w", err)
 	}
 
 	signalAdapter := newSignalAdapter(cfg)
 
-	inboundPoller := inbound.New(cfg.Signal.Account, location, signalAdapter, outboundAdapter)
+	inboundPoller := inbound.New(cfg.Signal.Account, location, signalAdapter, outboundSvc)
 
 	go func() {
 		for {

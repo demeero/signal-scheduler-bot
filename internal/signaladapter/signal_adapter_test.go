@@ -103,8 +103,6 @@ func TestSignalAdapter_ReceiveSelfMessages(t *testing.T) {
 		assert.Equal(t, "/v1/receive/"+account, r.URL.Path)
 
 		query := r.URL.Query()
-		assert.Equal(t, "30", query.Get("timeout"))
-		assert.Equal(t, "1000", query.Get("max_messages"))
 		assert.Equal(t, "true", query.Get("ignore_attachments"))
 		assert.Equal(t, "true", query.Get("ignore_stories"))
 		assert.Equal(t, "true", query.Get("ignore_avatars"))

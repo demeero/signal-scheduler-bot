@@ -49,7 +49,7 @@ func parseCancel(text string) (parsedCommand, error) {
 		return nil, fmt.Errorf("%w: cancel message id is empty", errbrick.ErrInvalidData)
 	}
 
-	id, err := strconv.ParseInt(idText, 10, 0)
+	id, err := strconv.ParseUint(idText, 10, 64)
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed parse id: %s", errbrick.ErrInvalidData, idText)
 	}
@@ -89,11 +89,11 @@ func (p *parser) parseSchedule(text string, now time.Time) (parsedCommand, error
 	}
 
 	return scheduleCommand{
-		whenUTC:           whenUTC,
-		originalLocalTime: localText,
-		timezone:          p.location.String(),
-		recipient:         recipient,
-		message:           message,
+		When:              whenUTC,
+		OriginalLocalTime: localText,
+		Timezone:          p.location.String(),
+		Recipient:         recipient,
+		Text:              message,
 	}, nil
 }
 

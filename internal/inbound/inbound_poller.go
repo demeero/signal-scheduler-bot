@@ -6,59 +6,64 @@ import (
 	"strings"
 	"time"
 
-	"github.com/demeero/signal-scheduler-bot/internal/dbadapter"
 	"github.com/demeero/signal-scheduler-bot/internal/errbrick"
 	"github.com/demeero/signal-scheduler-bot/internal/logbrick"
+	"github.com/demeero/signal-scheduler-bot/internal/outbound"
 	"github.com/demeero/signal-scheduler-bot/internal/signaladapter"
 )
 
 type Poller struct {
 	signalClient *signaladapter.SignalAdapter
 	parser       *parser
-	dbAdapter    *dbadapter.OutboundAdapter
+	outboundSvc  *outbound.Service
 	account      string
 }
 
-func New(account string, location *time.Location, signalClient *signaladapter.SignalAdapter, dbAdapter *dbadapter.OutboundAdapter) *Poller {
+func New(account string, location *time.Location, signalClient *signaladapter.SignalAdapter, outboundSvc *outbound.Service) *Poller {
 	return &Poller{
 		account:      account,
 		signalClient: signalClient,
 		parser:       newParser(location),
-		dbAdapter:    dbAdapter,
+		outboundSvc:  outboundSvc,
 	}
 }
 
 func (p *Poller) Poll(ctx context.Context) error {
+	logger := logbrick.FromCtx(ctx)
+	logger.Debug("polling inbound messages")
+
 	messages, err := p.signalClient.ReceiveSelfMessages(ctx)
 	if err != nil {
 		return fmt.Errorf("failed receive self messages: %w", err)
 	}
 	if len(messages) == 0 {
+		logger.Debug("no new inbound messages")
 		return nil
 	}
 
-	logger := logbrick.FromCtx(ctx)
+	logger.Debug(fmt.Sprintf("received %d inbound messages", len(messages)))
 
 	for _, msg := range messages {
 		body := strings.TrimSpace(msg.Body)
-
-		logger = logger.With("src_msg_id", msg.SourceMessageID)
+		msgLogger := logger.With("src_msg_id", msg.SourceMessageID)
 
 		if !strings.HasPrefix(body, "/") {
-			logger.Debug("ignore not command msg")
+			msgLogger.Debug("ignore not command msg")
 			continue
 		}
 
 		cmd, err := p.parser.Parse(body, time.Now().UTC())
 		if err != nil {
-			logger.Error("failed parse command", "err", err)
-			p.storeSelfOutboundErr(ctx, err)
+			msgLogger.Error("failed parse command", "err", err)
+			p.queueSelfOutboundErr(ctx, err)
 			continue
 		}
 
+		msgLogger.Debug("received command", "name", cmd.Name())
+
 		if err := p.handleCmd(ctx, cmd); err != nil {
-			logger.Error("failed handle command", "err", err)
-			p.storeSelfOutboundErr(ctx, err)
+			msgLogger.Error("failed handle command", "err", err)
+			p.queueSelfOutboundErr(ctx, err)
 			continue
 		}
 	}
@@ -82,38 +87,39 @@ func (p *Poller) handleCmd(ctx context.Context, cmd parsedCommand) error {
 }
 
 func (p *Poller) handleListCmd(ctx context.Context) error {
-	panic("not implemented")
+	return p.queueSelfOutboundMessage(ctx, "Command /list is not implemented yet.")
 }
 
 func (p *Poller) handleCancelCmd(ctx context.Context, cmd cancelCommand) error {
-	panic("not implemented")
+	_ = cmd
+	return p.queueSelfOutboundMessage(ctx, "Command /cancel is not implemented yet.")
 }
 
 func (p *Poller) handleScheduleCmd(ctx context.Context, cmd scheduleCommand) error {
-	resolvedRecipient, err := p.signalClient.ResolveRecipient(ctx, cmd.recipient)
+	recipientIdentifier, err := p.signalClient.ResolveRecipient(ctx, cmd.Recipient)
 	if err != nil {
 		return fmt.Errorf("failed resolve recipient: %w", err)
 	}
 
-	if _, err := p.dbAdapter.InsertOutboundMessage(ctx, cmd.whenUTC, cmd.recipient, resolvedRecipient, cmd.message); err != nil {
-		return fmt.Errorf("failed insert outbound message: %w", err)
+	params := outbound.CreateOutboundMessageParams{
+		ScheduledAt:         cmd.When,
+		Recipient:           cmd.Recipient,
+		RecipientIdentifier: recipientIdentifier,
+		Text:                cmd.Text,
+	}
+	outboundMessage, err := p.outboundSvc.CreateOutboundMessage(ctx, params)
+	if err != nil {
+		return fmt.Errorf("failed create outbound message: %w", err)
 	}
 
-	return nil
+	return p.queueSelfOutboundMessage(
+		ctx,
+		fmt.Sprintf("Scheduled message %d for %s (%s) to %s.", outboundMessage.ID, cmd.OriginalLocalTime, cmd.Timezone, cmd.Recipient),
+	)
 }
 
 func (p *Poller) handleHelpCmd(ctx context.Context) error {
-	return p.signalClient.SendMessage(ctx, p.account, helpText())
-}
-
-func (p *Poller) storeSelfOutboundErr(ctx context.Context, err error) {
-	if _, err := p.dbAdapter.InsertOutboundMessage(ctx, time.Now().UTC(), p.account, p.account, err.Error()); err != nil {
-		logbrick.FromCtx(ctx).Error("failed to insert outbound message", "err", err)
-	}
-}
-
-func helpText() string {
-	return strings.Join([]string{
+	helpText := strings.Join([]string{
 		"Available commands:",
 		"",
 		"/schedule YYYY-MM-DD HH:mm +380XXXXXXXXX Message text",
@@ -129,4 +135,27 @@ func helpText() string {
 		"",
 		"/help",
 	}, "\n")
+	return p.queueSelfOutboundMessage(ctx, helpText)
+}
+
+func (p *Poller) queueSelfOutboundErr(ctx context.Context, err error) {
+	if err := p.queueSelfOutboundMessage(ctx, err.Error()); err != nil {
+		logbrick.FromCtx(ctx).Error("failed to queue self error message", "err", err)
+	}
+}
+
+func (p *Poller) queueSelfOutboundMessage(ctx context.Context, text string) error {
+	params := outbound.CreateOutboundMessageParams{
+		ScheduledAt:         time.Now().UTC(),
+		Recipient:           p.account,
+		RecipientIdentifier: p.account,
+		Text:                text,
+	}
+	if _, err := p.outboundSvc.CreateOutboundMessage(ctx, params); err != nil {
+		return fmt.Errorf("failed queue self message: %w", err)
+	}
+
+	logbrick.FromCtx(ctx).Debug("self message queued", "msg", text)
+
+	return nil
 }
