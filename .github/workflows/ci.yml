@@ -2,7 +2,19 @@ name: CI
 
 on:
   push:
+    paths:
+      - ".github/workflows/ci.yml"
+      - ".golangci.yml"
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
   pull_request:
+    paths:
+      - ".github/workflows/ci.yml"
+      - ".golangci.yml"
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
 
 permissions:
   contents: read
