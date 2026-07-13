@@ -11,12 +11,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSignalAdapter_ResolveRecipient_ByPhone(t *testing.T) {
-	const account = "+380500000000"
+const testAccount = "+380500000000"
 
-	adapter := newTestAdapter(t, account, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestSignalAdapter_ResolveRecipient_ByPhone(t *testing.T) {
+	adapter := newTestAdapter(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
-		assert.Equal(t, "/v1/contacts/"+account, r.URL.Path)
+		assert.Equal(t, "/v1/contacts/"+testAccount, r.URL.Path)
 		writeReceiveJSON(t, w, contactsResponse{
 			{
 				Name:   "Alice",
@@ -32,11 +32,9 @@ func TestSignalAdapter_ResolveRecipient_ByPhone(t *testing.T) {
 }
 
 func TestSignalAdapter_ResolveRecipient_ByNameUsesUUIDFallback(t *testing.T) {
-	const account = "+380500000000"
-
-	adapter := newTestAdapter(t, account, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	adapter := newTestAdapter(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
-		assert.Equal(t, "/v1/contacts/"+account, r.URL.Path)
+		assert.Equal(t, "/v1/contacts/"+testAccount, r.URL.Path)
 		writeReceiveJSON(t, w, contactsResponse{
 			{
 				Name: "Alice Smith",
@@ -51,11 +49,9 @@ func TestSignalAdapter_ResolveRecipient_ByNameUsesUUIDFallback(t *testing.T) {
 }
 
 func TestSignalAdapter_ResolveRecipient_ReturnsConflictForAmbiguousMatch(t *testing.T) {
-	const account = "+380500000000"
-
-	adapter := newTestAdapter(t, account, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	adapter := newTestAdapter(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
-		assert.Equal(t, "/v1/contacts/"+account, r.URL.Path)
+		assert.Equal(t, "/v1/contacts/"+testAccount, r.URL.Path)
 		writeReceiveJSON(t, w, contactsResponse{
 			{Name: "Alice"},
 			{Name: "Alice"},
@@ -71,8 +67,8 @@ func TestParseRecipient(t *testing.T) {
 	tests := []struct {
 		name      string
 		recipient string
-		want      recipientRef
 		wantErr   string
+		want      recipientRef
 	}{
 		{
 			name:      "phone number",
@@ -112,11 +108,10 @@ func TestParseRecipient(t *testing.T) {
 }
 
 func TestSignalAdapter_SendMessage(t *testing.T) {
-	const account = "+380500000000"
 	const recipient = "+380501112233"
 	const body = "Test message"
 
-	adapter := newTestAdapter(t, account, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	adapter := newTestAdapter(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
 		assert.Equal(t, "/v2/send", r.URL.Path)
 
@@ -124,7 +119,7 @@ func TestSignalAdapter_SendMessage(t *testing.T) {
 		assert.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
 		assert.Equal(t, sendRequest{
 			Message:    body,
-			Number:     account,
+			Number:     testAccount,
 			Recipients: []string{recipient},
 		}, payload)
 
@@ -136,7 +131,7 @@ func TestSignalAdapter_SendMessage(t *testing.T) {
 }
 
 func TestSignalAdapter_SendMessage_HTTPJSONError(t *testing.T) {
-	adapter := newTestAdapter(t, "+380500000000", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	adapter := newTestAdapter(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		writeReceiveJSON(t, w, map[string]string{"error": "recipient missing"})
 	}))
@@ -148,7 +143,7 @@ func TestSignalAdapter_SendMessage_HTTPJSONError(t *testing.T) {
 }
 
 func TestSignalAdapter_SendMessage_HTTPTextError(t *testing.T) {
-	adapter := newTestAdapter(t, "+380500000000", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	adapter := newTestAdapter(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_, err := w.Write([]byte("temporarily unavailable"))
 		assert.NoError(t, err)
@@ -161,10 +156,9 @@ func TestSignalAdapter_SendMessage_HTTPTextError(t *testing.T) {
 }
 
 func TestSignalAdapter_SendSelfMessage(t *testing.T) {
-	const account = "+380500000000"
 	const body = "Self note"
 
-	adapter := newTestAdapter(t, account, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	adapter := newTestAdapter(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
 		assert.Equal(t, "/v2/send", r.URL.Path)
 
@@ -172,8 +166,8 @@ func TestSignalAdapter_SendSelfMessage(t *testing.T) {
 		assert.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
 		assert.Equal(t, sendRequest{
 			Message:    body,
-			Number:     account,
-			Recipients: []string{account},
+			Number:     testAccount,
+			Recipients: []string{testAccount},
 		}, payload)
 
 		w.WriteHeader(http.StatusAccepted)
@@ -184,11 +178,9 @@ func TestSignalAdapter_SendSelfMessage(t *testing.T) {
 }
 
 func TestSignalAdapter_ReceiveSelfMessages(t *testing.T) {
-	const account = "+380500000000"
-
-	adapter := newTestAdapter(t, account, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	adapter := newTestAdapter(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
-		assert.Equal(t, "/v1/receive/"+account, r.URL.Path)
+		assert.Equal(t, "/v1/receive/"+testAccount, r.URL.Path)
 
 		query := r.URL.Query()
 		assert.Equal(t, "true", query.Get("ignore_attachments"))
@@ -204,7 +196,7 @@ func TestSignalAdapter_ReceiveSelfMessages(t *testing.T) {
 					SourceUUID: "ignored-account",
 					SyncMessage: &syncMessage{
 						SentMessage: &sentMessage{
-							DestinationNumber: account,
+							DestinationNumber: testAccount,
 							Message:           "ignore other account",
 							Timestamp:         1_780_293_000_000,
 						},
@@ -212,35 +204,35 @@ func TestSignalAdapter_ReceiveSelfMessages(t *testing.T) {
 				},
 			},
 			{
-				Account:  account,
+				Account:  testAccount,
 				Envelope: envelope{SourceUUID: "ignored-no-sync"},
 			},
 			{
-				Account: account,
+				Account: testAccount,
 				Envelope: envelope{
 					SourceUUID:  "ignored-no-sent",
 					SyncMessage: &syncMessage{},
 				},
 			},
 			{
-				Account: account,
+				Account: testAccount,
 				Envelope: envelope{
 					SourceUUID: "ignored-empty-message",
 					SyncMessage: &syncMessage{
 						SentMessage: &sentMessage{
-							DestinationNumber: account,
+							DestinationNumber: testAccount,
 							Timestamp:         1_780_293_100_000,
 						},
 					},
 				},
 			},
 			{
-				Account: account,
+				Account: testAccount,
 				Envelope: envelope{
 					SourceUUID: "ignored-expiration-update",
 					SyncMessage: &syncMessage{
 						SentMessage: &sentMessage{
-							DestinationNumber:  account,
+							DestinationNumber:  testAccount,
 							Message:            "ignore expiration",
 							Timestamp:          1_780_293_200_000,
 							IsExpirationUpdate: true,
@@ -249,7 +241,7 @@ func TestSignalAdapter_ReceiveSelfMessages(t *testing.T) {
 				},
 			},
 			{
-				Account: account,
+				Account: testAccount,
 				Envelope: envelope{
 					SourceUUID: "ignored-other-destination",
 					SyncMessage: &syncMessage{
@@ -263,14 +255,14 @@ func TestSignalAdapter_ReceiveSelfMessages(t *testing.T) {
 				},
 			},
 			{
-				Account: account,
+				Account: testAccount,
 				Envelope: envelope{
 					SourceUUID:               "self-number",
 					ServerReceivedTimestamp:  1_780_293_401_000,
 					ServerDeliveredTimestamp: 1_780_293_402_000,
 					SyncMessage: &syncMessage{
 						SentMessage: &sentMessage{
-							DestinationNumber: account,
+							DestinationNumber: testAccount,
 							Message:           "/help",
 							Timestamp:         1_780_293_400_000,
 						},
@@ -278,14 +270,14 @@ func TestSignalAdapter_ReceiveSelfMessages(t *testing.T) {
 				},
 			},
 			{
-				Account: account,
+				Account: testAccount,
 				Envelope: envelope{
 					SourceUUID:               "self-destination",
 					ServerReceivedTimestamp:  1_780_293_501_000,
 					ServerDeliveredTimestamp: 1_780_293_502_000,
 					SyncMessage: &syncMessage{
 						SentMessage: &sentMessage{
-							Destination: account,
+							Destination: testAccount,
 							Message:     "ping",
 							Timestamp:   1_780_293_500_000,
 						},
@@ -313,7 +305,7 @@ func TestSignalAdapter_ReceiveSelfMessages(t *testing.T) {
 }
 
 func TestSignalAdapter_ReceiveSelfMessages_HTTPJSONError(t *testing.T) {
-	adapter := newTestAdapter(t, "+380500000000", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	adapter := newTestAdapter(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		writeReceiveJSON(t, w, map[string]string{"error": "signal service unavailable"})
 	}))
@@ -325,7 +317,7 @@ func TestSignalAdapter_ReceiveSelfMessages_HTTPJSONError(t *testing.T) {
 }
 
 func TestSignalAdapter_ReceiveSelfMessages_HTTPTextError(t *testing.T) {
-	adapter := newTestAdapter(t, "+380500000000", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	adapter := newTestAdapter(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 		_, err := w.Write([]byte("upstream reset"))
 		assert.NoError(t, err)
@@ -338,7 +330,7 @@ func TestSignalAdapter_ReceiveSelfMessages_HTTPTextError(t *testing.T) {
 }
 
 func TestSignalAdapter_ReceiveSelfMessages_DecodeError(t *testing.T) {
-	adapter := newTestAdapter(t, "+380500000000", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	adapter := newTestAdapter(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, err := w.Write([]byte("{"))
 		assert.NoError(t, err)
@@ -355,7 +347,7 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
 }
 
-func newTestAdapter(t *testing.T, account string, handler http.HandlerFunc) *SignalAdapter {
+func newTestAdapter(t *testing.T, handler http.HandlerFunc) *SignalAdapter {
 	t.Helper()
 
 	client := &http.Client{
@@ -367,7 +359,7 @@ func newTestAdapter(t *testing.T, account string, handler http.HandlerFunc) *Sig
 		}),
 	}
 
-	return New(account, "http://signal.test", client)
+	return New(testAccount, "http://signal.test", client)
 }
 
 func writeReceiveJSON(t *testing.T, w http.ResponseWriter, payload any) {

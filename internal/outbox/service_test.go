@@ -677,7 +677,7 @@ func newServiceFixtureWithConfig(t *testing.T, maxAge, vacuumAge time.Duration, 
 			}
 			recorder.WriteHeader(resp.statusCode)
 			if resp.body != "" {
-				_, writeErr := recorder.Write([]byte(resp.body))
+				_, writeErr := recorder.WriteString(resp.body)
 				if writeErr != nil {
 					t.Errorf("write response: %v", writeErr)
 				}

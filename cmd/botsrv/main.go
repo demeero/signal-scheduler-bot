@@ -30,6 +30,11 @@ var (
 	BuildTime = "unknown"
 )
 
+const (
+	versionFlag       = "--version"
+	versionFlagCompat = "-version"
+)
+
 func main() {
 	if shouldPrintVersion(os.Args[1:]) {
 		fmt.Println(versionString())
@@ -53,7 +58,7 @@ func main() {
 }
 
 func shouldPrintVersion(args []string) bool {
-	return len(args) == 1 && (args[0] == "--version" || args[0] == "-version")
+	return len(args) == 1 && (args[0] == versionFlag || args[0] == versionFlagCompat)
 }
 
 func versionString() string {

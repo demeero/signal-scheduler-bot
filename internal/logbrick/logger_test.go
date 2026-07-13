@@ -2,7 +2,6 @@ package logbrick
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"testing"
 
@@ -34,7 +33,7 @@ func TestConfigure_SetsDefaultLoggerForSupportedHandlers(t *testing.T) {
 }
 
 func TestParseLevel_InvalidUsesFallback(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := slog.New(slog.DiscardHandler)
 	previous := slog.Default()
 	slog.SetDefault(logger)
 	t.Cleanup(func() {
@@ -48,7 +47,7 @@ func TestParseLevel_InvalidUsesFallback(t *testing.T) {
 func TestContextHelpers(t *testing.T) {
 	require.Same(t, slog.Default(), FromCtx(context.Background()))
 
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := slog.New(slog.DiscardHandler)
 	ctx := ToCtx(context.Background(), logger)
 
 	require.Same(t, logger, FromCtx(ctx))
