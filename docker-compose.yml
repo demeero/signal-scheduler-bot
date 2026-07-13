@@ -1,0 +1,27 @@
+services:
+  signal-api:
+    image: bbernhard/signal-cli-rest-api:0.100
+    restart: unless-stopped
+    environment:
+      MODE: native
+      PORT: 8080
+      SWAGGER_HOST: localhost:18080
+    ports:
+      - "18080:8080"
+    volumes:
+      - ./var/signal-rest-api:/home/.local/share/signal-cli
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - signal-api
+    env_file:
+      - .env
+    environment:
+      SIGNAL_API_BASE_URL: http://signal-api:8080
+      BOLT_PATH: /data/signal-scheduler-bot
+    volumes:
+      - ./var:/data

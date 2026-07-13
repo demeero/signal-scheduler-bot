@@ -1,0 +1,13 @@
+.git
+.env
+.idea
+.coverage
+.cache
+.DS_Store
+.golangci.yml
+.gitignore
+Taskfile.yml
+README.md
+bin
+var
+vendor
