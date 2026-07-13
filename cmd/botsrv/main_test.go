@@ -18,6 +18,34 @@ func TestRun_InvalidTimezone(t *testing.T) {
 	require.ErrorContains(t, err, "failed load timezone")
 }
 
+func TestShouldPrintVersion(t *testing.T) {
+	require.True(t, shouldPrintVersion([]string{"--version"}))
+	require.True(t, shouldPrintVersion([]string{"-version"}))
+	require.False(t, shouldPrintVersion(nil))
+	require.False(t, shouldPrintVersion([]string{"version"}))
+	require.False(t, shouldPrintVersion([]string{"--version", "--verbose"}))
+}
+
+func TestVersionString(t *testing.T) {
+	oldVersion := Version
+	oldCommit := Commit
+	oldBuildTime := BuildTime
+	Version = "v1.2.3"
+	Commit = "abc1234"
+	BuildTime = "2026-07-13T10:00:00Z"
+	t.Cleanup(func() {
+		Version = oldVersion
+		Commit = oldCommit
+		BuildTime = oldBuildTime
+	})
+
+	require.Equal(
+		t,
+		"signal-scheduler-bot version=v1.2.3 commit=abc1234 build_time=2026-07-13T10:00:00Z",
+		versionString(),
+	)
+}
+
 func TestOpenBoltDB_RejectsEmptyPath(t *testing.T) {
 	_, err := openBoltDB(config.Bolt{Path: " \t ", Timeout: time.Second})
 	require.Error(t, err)

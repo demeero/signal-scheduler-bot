@@ -1,333 +1,90 @@
 # AGENTS.md
 
-# Signal Scheduler
+# Signal Scheduler Bot
 
-A small Go application that adds scheduled messages to Signal by using `signal-rest-api`.
+This repository contains a small Go service that lets a single user schedule Signal messages by sending commands to their own `Note to Self` chat.
 
-## Goal
+The service depends on:
 
-The application allows a single user to schedule Signal messages by sending commands to their own **Note to Self** chat.
+- `signal-rest-api` for receiving commands, resolving recipients, and sending messages
+- `bbolt` for storing scheduled messages and delivery state
 
-The application is intentionally simple.
+User-facing setup and usage belong in [`README.md`](/Users/demeero/workspace/signal-scheduler-bot/README.md:1). Keep `AGENTS.md` focused on contributor guidance and implementation boundaries.
 
-Do **not** introduce DDD, Hexagonal Architecture, Clean Architecture, CQRS, Event Sourcing, or other enterprise patterns.
+## Project Intent
 
-Prefer readable and maintainable code over abstraction.
+- Keep the project small, explicit, and easy to modify.
+- Prefer straightforward code over abstractions.
+- Do not introduce DDD, Hexagonal Architecture, Clean Architecture, CQRS, Event Sourcing, or similar enterprise patterns.
+- Do not add web UI, multi-user flows, or generic automation-platform concepts unless explicitly requested.
 
----
+## Implementation Shape
 
-# Stack
+The current codebase is intentionally compact and centered around a few packages:
 
-- Go (latest stable)
-- bbolt
-- signal-rest-api
+- `cmd/botsrv` wires configuration, logging, BoltDB, and workers.
+- `internal/bot` handles command polling and parsing.
+- `internal/outbox` stores scheduled messages and drives delivery attempts.
+- `internal/signaladapter` wraps `signal-rest-api`.
+- `internal/config`, `internal/logbrick`, and `internal/errbrick` provide shared support code.
 
----
+At runtime, the service currently runs periodic loops for:
 
-# Project Philosophy
+- inbound polling
+- due-message sending
+- outbox vacuuming
 
-This project is intended to be:
+Keep new code aligned with this simple shape unless there is a clear reason to change it.
 
-- small
-- easy to understand
-- easy to debug
-- easy to modify
+## Behavioral Boundaries
 
-When making architectural decisions, always choose the simpler solution unless complexity is clearly justified.
+- The bot is controlled through `Note to Self`.
+- Command parsing should stay strict and return descriptive errors.
+- Scheduled messages are persisted in UTC.
+- User-facing date parsing and formatting use the configured timezone.
+- Recipient resolution should continue to happen through Signal contacts before scheduling.
+- Delivery state should stay explicit and easy to inspect in storage and logs.
 
----
+When changing behavior, prefer updating README for user-visible changes instead of growing `AGENTS.md` into product documentation.
 
-# High Level Architecture
+## Working Agreements
 
-The application consists of several independent components.
+- Start with a short plan, then execute.
+- All comments and documentation should be in English.
+- Add or adjust tests when behavior changes. If tests are not feasible, explain why and what was validated instead.
+- When you introduce non-obvious behavior, leave a short comment or update the nearest README/AGENTS.md. Keep docs concise.
+- After changes, check whether the project still builds and whether the relevant tests pass.
+- Fix root causes, not symptoms.
 
-```
-main
- ├── signaladapter
- ├── dbadapter (bbolt)
- ├── inbound (inbound messages processing)
- ├── outbound (outbound messaging processing)
-```
+## Code Style
 
----
+- Keep functions flat. Prefer guard clauses and early returns over nested control flow.
+- Prefer small packages and small files.
+- Keep code explicit and readable.
+- Use singular, lowercase package names.
+- Export only identifiers that are needed outside the package.
+- Keep config, logging, and naming consistent with the existing code.
 
-# Workers
+## Error Handling
 
-There are exactly two long-running workers.
+- Use shared sentinels from `internal/errbrick/errors.go` for cross-layer error classification where appropriate.
+- Wrap low-level errors with context using `fmt.Errorf("...: %w", err)`.
+- Do not swallow infrastructure errors.
+- Do not panic except during startup-level failures where the process cannot continue.
 
-## 1. Command Worker
+## Testing
 
-Responsibilities:
+- Prioritize tests for parser behavior, scheduling behavior, storage state transitions, and Signal adapter behavior.
+- Prefer real BoltDB usage with temporary files over mocking storage.
+- Avoid excessive mocking in general.
+- Keep tests close to exported behavior.
 
-- poll Note to Self messages
-- parse commands
-- validate commands
-- create scheduled messages
-- list scheduled messages
-- cancel scheduled messages
-- reply back to Note to Self with success/error
+## Keep It Simple
 
-This worker **never sends scheduled user messages**.
-
----
-
-## 2. Scheduler Worker
-
-Runs periodically.
-
-Responsibilities:
-
-- scan BoltDB
-- find due messages
-- send messages through signal-rest-api
-- update message status
-- retry temporary failures
-- notify Note to Self when permanent failure occurs
-
-This worker never parses commands.
-
----
-
-# Storage
-
-Use bbolt as the only database.
-
-Keep the schema simple.
-
-No migrations are required.
-
-Database schema should be easy to evolve manually.
-
----
-
-# Command Parsing
-
-Supported commands:
-
-```
-/schedule YYYY-MM-DD HH:mm +380XXXXXXXXX Message
-
-/schedule tomorrow HH:mm +380XXXXXXXXX Message
-
-/schedule today HH:mm +380XXXXXXXXX Message
-
-/schedule YYYY-MM-DD HH:mm "Contact Name" Message
-
-/schedule tomorrow HH:mm "Contact Name" Message
-
-/schedule today HH:mm "Contact Name" Message
-
-/upcoming
-
-/cancel MESSAGE_ID
-
-/help
-```
-
-Parsing should be strict.
-
-Return descriptive errors.
-
-Do not silently ignore invalid input.
-
----
-
-# Contact Resolution
-
-Recipients may be:
-
-- phone number
-- Signal contact name
-
-Before scheduling:
-
-- verify the contact exists
-- resolve the Signal recipient identifier
-- reject unknown contacts
-
-Store the resolved identifier together with the original recipient string.
-
----
-
-# Scheduler
-
-Scheduler periodically scans pending messages.
-
-For every message:
-
-- skip cancelled
-- skip already sent
-- send when ScheduledAt <= now
-
-After successful send:
-
-- mark as sent
-
-After temporary failure:
-
-- retry later
-
-After permanent failure:
-
-- mark failed
-- notify Note to Self
-
----
-
-# Retry Policy
-
-Retry only temporary failures.
-
-Suggested defaults:
-
-- max retries: 3
-- retry delay: 3 minutes
-
-Do not retry permanent errors.
-
----
-
-# Logging
-
-Use structured logging.
-
-Log:
-
-- worker start
-- worker stop
-- parsed commands
-- scheduled messages
-- sent messages
-- retries
-- failures
-
-Avoid excessive logging.
-
----
-
-# Error Handling
-
-Return wrapped errors.
-
-Prefer:
-
-```go
-fmt.Errorf("parse command: %w", err)
-```
-
-Do not panic except during startup.
-
----
-
-# Concurrency
-
-Workers run independently.
-
-BoltDB access must be safe.
-
-Avoid unnecessary goroutines.
-
----
-
-# Time
-
-Store all timestamps in UTC.
-
-Convert user input into UTC before saving.
-
----
-
-# IDs
-
-Message IDs should be unique and human-friendly enough to be used with:
-
-```
-/cancel MESSAGE_ID
-```
-
-Simple increasing uint64 IDs are preferred.
-
----
-
-# Code Style
-
-Prefer small packages.
-
-Prefer small files.
-
-Avoid files larger than ~500 lines.
-
-Avoid functions larger than ~100 lines.
-
-Keep code explicit.
-
-Do not introduce interfaces unless there are at least two implementations or testing clearly benefits.
-
----
-
-# Testing
-
-Prioritize tests for:
-
-- command parser
-- date parsing
-- scheduler logic
-- retry logic
-- storage
-
-Avoid excessive mocking.
-
-Prefer real BoltDB using temporary files.
-
----
-
-# Keep It Simple
-
-When adding new code, ask:
+Before adding code, ask:
 
 - Can this be solved with the standard library?
 - Can this be done without another abstraction?
-- Can this be understood in one minute?
+- Can this be understood quickly by someone new to the repo?
 
 If yes, prefer that solution.
-
-The simplest correct implementation is usually the preferred implementation.
-
-## Working agreements
-
-- Start with a short plan (2–6 bullets), then execute. If unsure, ask at most 1–2 clarifying questions or propose 1–2 options with tradeoffs.
-- All comments and documentation should be in English.
-- Add or adjust tests when behavior changes. If tests aren’t feasible, explain why and what was validated instead.
-- When you introduce non-obvious behavior, leave a short comment or update the nearest README/AGENTS.md. Keep docs concise.
-- After changes, check whether the project still builds and whether the relevant tests pass.
-- Fix root causes, not symptoms. Do not stop at suppressing errors or adding defensive conditionals without addressing the underlying cause.
-
-## Coding Style & Naming Conventions
-
-- Keep functions flat. Prefer guard clauses and early returns over nested control flow.
-- Use singular names for packages.
-- Package names are short, lowercase, and business-oriented.
-- Go packages should be self-contained and have minimal external dependencies.
-- Export only identifiers that are needed outside the package.
-- Go 1.26 module: prefer modern Go features that fit naturally.
-- Indentation follows Go defaults (tabs in Go files).
-- Keep CLI/config/logging naming consistent with existing patterns.
-
-### Error conventions
-
-- Use shared sentinels from `internal/errbrick/errors.go` for cross-layer error classification.
-- Wrap low-level errors with context using `fmt.Errorf(...: %w, err)`.
-- Do not swallow infrastructure errors.
-
-## Testing Guidelines
-
-- Use `testify` for assertions and suites.
-- Prefer `require` for checks after which continuing the test would produce misleading follow-up failures.
-- For error assertions, prefer `require.Error`, `require.NoError`, `require.ErrorIs`, `require.ErrorContains`, and `require.ErrorAs`.
-- Name tests `Test<ElementName>[_AdditionalInfo]`.
-- Keep fixtures under `testdata/` where applicable.
-- Prefer table tests, but split them into separate tests when tables become harder to read than the behavior they cover.
-- Prefer testing exported behavior over testing private helpers directly.
-- Do not use `t.Parallel()` without approval.
-- Use `t.Context()` instead of `context.Background()` in tests.
-- If a mock is required, use `go:generate mockgen ...` and place generated mocks in a `mock` directory.

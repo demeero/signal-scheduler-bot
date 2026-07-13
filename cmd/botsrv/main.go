@@ -24,9 +24,24 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
+var (
+	Version   = "dev"
+	Commit    = "unknown"
+	BuildTime = "unknown"
+)
+
 func main() {
+	if shouldPrintVersion(os.Args[1:]) {
+		fmt.Println(versionString())
+		return
+	}
+
 	cfg := config.Load()
 	logbrick.Configure(cfg.Log.Level, cfg.Log.AddSource, cfg.Log.JSON, cfg.Log.Pretty)
+	slog.Info("starting signal scheduler bot",
+		"version", Version,
+		"commit", Commit,
+		"build_time", BuildTime)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -35,6 +50,14 @@ func main() {
 		slog.Error("failed run", "err", err)
 		os.Exit(1)
 	}
+}
+
+func shouldPrintVersion(args []string) bool {
+	return len(args) == 1 && (args[0] == "--version" || args[0] == "-version")
+}
+
+func versionString() string {
+	return fmt.Sprintf("signal-scheduler-bot version=%s commit=%s build_time=%s", Version, Commit, BuildTime)
 }
 
 func run(ctx context.Context, cfg config.Config) error {

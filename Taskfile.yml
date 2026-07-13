@@ -35,8 +35,14 @@ tasks:
     vars:
       GOOS: '{{.GOOS | default OS}}'
       GOARCH: '{{.GOARCH | default ARCH}}'
+      VERSION:
+        sh: git describe --tags --always --dirty 2>/dev/null || echo "dev"
+      COMMIT:
+        sh: git rev-parse --short HEAD 2>/dev/null || echo "unknown"
+      BUILD_TIME:
+        sh: date -u '+%Y-%m-%dT%H:%M:%SZ'
     cmds:
-      - GOOS={{.GOOS}} GOARCH={{.GOARCH}} go build -v -o ./bin/signal_scheduler_bot {{.BINARY_PATH}}
+      - GOOS={{.GOOS}} GOARCH={{.GOARCH}} go build -ldflags="-X 'github.com/demeero/signal-scheduler-bot/cmd/botsrv.Version={{.VERSION}}' -X 'github.com/demeero/signal-scheduler-bot/cmd/botsrv.Commit={{.COMMIT}}' -X 'github.com/demeero/signal-scheduler-bot/cmd/botsrv.BuildTime={{.BUILD_TIME}}'" -v -o ./bin/signal_scheduler_bot  {{.BINARY_PATH}}
 
   run:
     desc: Run API server locally.
@@ -55,3 +61,8 @@ tasks:
       - go test -count 1 -coverprofile=.coverage/cover.out ./...
       - go tool cover -func=.coverage/cover.out
       - go tool cover -html=.coverage/cover.out -o .coverage/cover.html
+
+  release:
+    desc: "Update CHANGELOG.md and create tag version"
+    cmds:
+      - ./release.sh
