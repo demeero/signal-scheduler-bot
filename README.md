@@ -7,6 +7,10 @@ It uses:
 - `signal-rest-api` to receive commands, resolve contacts, and send messages
 - `bbolt` to store scheduled messages and delivery state
 
+Published image:
+
+- `docker.io/demeero/signal-scheduler-bot`
+
 ## Goal
 
 The goal of this project is to keep scheduled Signal messaging simple:
@@ -62,7 +66,16 @@ All timestamps are stored in UTC. User-facing date parsing is done in the config
 - Docker Compose
 - A Signal account on your phone
 
+## Installation Options
+
+You can run the scheduler in two ways:
+
+- use the published Docker Hub image: `docker.io/demeero/signal-scheduler-bot`
+- build it locally from this repository
+
 ## Quick Start
+
+This repository includes a local [`docker-compose.yml`](/Users/demeero/workspace/signal-scheduler-bot/docker-compose.yml:1) that builds the scheduler from source.
 
 1. Copy the example environment file:
 
@@ -91,6 +104,50 @@ docker compose up -d scheduler
 ```
 
 6. Open Signal on your phone and send `/help` to `Note to Self`.
+
+## Running the Published Docker Hub Image
+
+If you do not want to build the scheduler locally, pull the published image from Docker Hub:
+
+```bash
+docker pull demeero/signal-scheduler-bot:latest
+```
+
+Minimal example:
+
+```bash
+docker run -d \
+  --name signal-scheduler-bot \
+  --restart unless-stopped \
+  --env-file .env \
+  -e SIGNAL_API_BASE_URL=http://host.docker.internal:18080 \
+  -e BOLT_PATH=/data/signal-scheduler-bot \
+  -v "$(pwd)/var:/data" \
+  demeero/signal-scheduler-bot:latest
+```
+
+Notes:
+
+- On Linux, `host.docker.internal` may require extra Docker host configuration. If needed, point `SIGNAL_API_BASE_URL` to a reachable host or run both services in the same compose stack.
+- The container only runs the scheduler. You still need a working `signal-rest-api` instance and a linked Signal account.
+
+If you want to use the published image in Docker Compose instead of building locally, the `scheduler` service can look like this:
+
+```yaml
+services:
+  scheduler:
+    image: demeero/signal-scheduler-bot:latest
+    restart: unless-stopped
+    depends_on:
+      - signal-api
+    env_file:
+      - .env
+    environment:
+      SIGNAL_API_BASE_URL: http://signal-api:8080
+      BOLT_PATH: /data/signal-scheduler-bot
+    volumes:
+      - ./var:/data
+```
 
 ## Linking `signal-rest-api` to Your Signal Account
 
@@ -225,7 +282,7 @@ The service reads configuration from environment variables.
 The provided compose stack contains two services:
 
 - `signal-api`: the external Signal bridge based on `bbernhard/signal-cli-rest-api`
-- `scheduler`: this project
+- `scheduler`: this project, built locally from the repository Dockerfile
 
 Start everything:
 
@@ -258,6 +315,45 @@ Build the binary:
 ```bash
 task build
 ```
+## Releases and Conventional Commits
+
+Releases are managed locally via `task release`, which runs `./release.sh`. The script is responsible for:
+
+- Generating/Updating `CHANGELOG.md` (via git-cliff)
+- Creating an annotated tag (SemVer, typically `vX.Y.Z`)
+
+After that, pushing the release commit and tag publishes the Docker image through GitHub Actions.
+
+Conventional Commits are strongly recommended because they keep history readable and improve automated changelog generation.
+
+### Format
+
+```
+<type>[(scope)]: <subject>
+```
+
+### Types
+
+- `feat`: new functionality
+- `fix`: bug fix
+- `refactor`: code change without behavior change
+- `style`: changes that do not affect the meaning of the code (white-space, formatting, missing semi-colons, etc)
+- `perf`: code change that improves performance
+- `docs`: documentation only
+- `chore`: tooling/maintenance
+- `test`: adding/updating tests
+- `ci`: CI/CD changes
+
+### Scope
+
+Use a short, lowercase scope describing the area, e.g. `cli`, `api`, `deploy`, `config`.
+Scope can also include a ticket number or a combination of both, for example: `feat(cli-123): commit message`.
+
+### References
+
+- https://www.conventionalcommits.org/en/v1.0.0/
+- https://git-cliff.org/docs/
+
 
 ## Operational Notes
 
