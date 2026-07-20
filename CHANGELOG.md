@@ -1,3 +1,16 @@
+## [1.1.0] - 2026-07-20
+
+### 🚀 Features
+
+- Enhance recipient resolution by adding profile name matching
+
+### 📚 Documentation
+
+- Update README with installation options and Docker usage instructions
+
+### ⚙️ Miscellaneous Tasks
+
+- Limit workflow triggers to Go-related changes
 ## [1.0.1] - 2026-07-13
 
 ### ⚙️ Miscellaneous Tasks
