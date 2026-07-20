@@ -68,7 +68,7 @@ func (s *SignalAdapter) ResolveRecipient(ctx context.Context, recipient string) 
 		switch {
 		case parsedRecipient.IsPhoneNum && contact.MatchesPhone(parsedRecipient.Value):
 			matches = append(matches, contact)
-		case !parsedRecipient.IsPhoneNum && contact.Name == parsedRecipient.Value:
+		case !parsedRecipient.IsPhoneNum && contact.MatchesName(parsedRecipient.Value):
 			matches = append(matches, contact)
 		}
 	}

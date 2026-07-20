@@ -41,12 +41,26 @@ type sentMessage struct {
 type contactsResponse []contact
 
 type contact struct {
-	Number      string `json:"number"`
-	UUID        string `json:"uuid"`
-	Name        string `json:"name"`
-	ProfileName string `json:"profile_name"`
-	Username    string `json:"username"`
-	Blocked     bool   `json:"blocked"`
+	Nickname    contactNickname `json:"nickname"`
+	Profile     contactProfile  `json:"profile"`
+	Number      string          `json:"number"`
+	UUID        string          `json:"uuid"`
+	Name        string          `json:"name"`
+	ProfileName string          `json:"profile_name"`
+	Username    string          `json:"username"`
+	GivenName   string          `json:"given_name"`
+	Blocked     bool            `json:"blocked"`
+}
+
+type contactProfile struct {
+	GivenName string `json:"given_name"`
+	LastName  string `json:"lastname"`
+}
+
+type contactNickname struct {
+	Name       string `json:"name"`
+	GivenName  string `json:"given_name"`
+	FamilyName string `json:"family_name"`
 }
 
 func (c contact) MatchesPhone(expected string) bool {
@@ -60,6 +74,24 @@ func (c contact) MatchesPhone(expected string) bool {
 	}
 
 	return phonenumbers.Format(number, phonenumbers.E164) == expected
+}
+
+func (c contact) MatchesName(expected string) bool {
+	for _, candidate := range []string{
+		c.Name,
+		c.ProfileName,
+		c.Username,
+		c.Profile.GivenName,
+		c.GivenName,
+		c.Nickname.Name,
+		c.Nickname.GivenName,
+	} {
+		if strings.TrimSpace(candidate) == expected {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (c contact) Identifier() string {

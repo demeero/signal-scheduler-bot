@@ -48,6 +48,26 @@ func TestSignalAdapter_ResolveRecipient_ByNameUsesUUIDFallback(t *testing.T) {
 	require.Equal(t, "alice-uuid", recipient)
 }
 
+func TestSignalAdapter_ResolveRecipient_ByProfileGivenName(t *testing.T) {
+	adapter := newTestAdapter(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "/v1/contacts/"+testAccount, r.URL.Path)
+		writeReceiveJSON(t, w, contactsResponse{
+			{
+				Number: "+380668360625",
+				UUID:   "expert-uuid",
+				Profile: contactProfile{
+					GivenName: "expert",
+				},
+			},
+		})
+	}))
+
+	recipient, err := adapter.ResolveRecipient(t.Context(), "expert")
+	require.NoError(t, err)
+	require.Equal(t, "+380668360625", recipient)
+}
+
 func TestSignalAdapter_ResolveRecipient_ReturnsConflictForAmbiguousMatch(t *testing.T) {
 	adapter := newTestAdapter(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
