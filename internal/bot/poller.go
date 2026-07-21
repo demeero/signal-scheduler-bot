@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -79,6 +80,8 @@ func (p *Poller) handleCmd(ctx context.Context, cmd parsedCommand) error {
 		return p.handleHelpCmd(ctx)
 	case upcomingCommand:
 		return p.handleUpcomingCmd(ctx)
+	case historyCommand:
+		return p.handleHistoryCmd(ctx, c)
 	case cancelCommand:
 		return p.handleCancelCmd(ctx, c)
 	case scheduleCommand:
@@ -105,6 +108,21 @@ func (p *Poller) handleUpcomingCmd(ctx context.Context) error {
 			msg.Recipient,
 			msg.Text,
 		))
+	}
+
+	return p.queueSelfOutboxMessage(ctx, strings.Join(lines, "\n"))
+}
+
+func (p *Poller) handleHistoryCmd(ctx context.Context, cmd historyCommand) error {
+	messages, err := p.outboxSvc.LoadHistoryMessages(ctx, cmd.limit)
+	if err != nil {
+		return fmt.Errorf("failed load outbox history: %w", err)
+	}
+
+	lines := make([]string, 0, len(messages)+1)
+	lines = append(lines, fmt.Sprintf("History: %d", len(messages)))
+	for _, msg := range messages {
+		lines = append(lines, formatHistoryLine(p.location, msg))
 	}
 
 	return p.queueSelfOutboxMessage(ctx, strings.Join(lines, "\n"))
@@ -162,6 +180,8 @@ func (p *Poller) handleHelpCmd(ctx context.Context) error {
 		"",
 		commandUpcoming,
 		"",
+		commandHistory + " [LIMIT]",
+		"",
 		"/cancel MESSAGE_ID",
 		"",
 		"/help",
@@ -189,4 +209,26 @@ func (p *Poller) queueSelfOutboxMessage(ctx context.Context, text string) error 
 	logbrick.FromCtx(ctx).Debug("self outbox message queued", "msg", text)
 
 	return nil
+}
+
+func formatHistoryLine(location *time.Location, msg outbox.Message) string {
+	lastError := "-"
+	if msg.LastError != "" {
+		lastError = strconv.Quote(msg.LastError)
+	}
+
+	return strings.Join([]string{
+		strconv.FormatUint(msg.ID, 10),
+		"status: " + string(msg.Status),
+		"scheduled: " + formatHistoryTime(location, msg.ScheduledAt),
+		"updated: " + formatHistoryTime(location, msg.UpdatedAt),
+		"recipient: " + strconv.Quote(msg.Recipient),
+		fmt.Sprintf("attempts: %d/%d", msg.Attempt, msg.MaxAttempts),
+		"last error: " + lastError,
+		"text: " + strconv.Quote(msg.Text),
+	}, " | ")
+}
+
+func formatHistoryTime(location *time.Location, value time.Time) string {
+	return value.In(location).Format("2006-01-02 15:04:05") + " (" + location.String() + ")"
 }

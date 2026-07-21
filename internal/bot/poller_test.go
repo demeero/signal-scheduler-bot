@@ -134,6 +134,69 @@ func TestPoller_Poll_UpcomingHidesOverduePendingMessages(t *testing.T) {
 	require.Equal(t, "Upcoming messages: 0", reply.Text)
 }
 
+func TestPoller_Poll_HistoryListsDeliveryDetails(t *testing.T) {
+	location, err := time.LoadLocation("Europe/Kyiv")
+	require.NoError(t, err)
+
+	fixture := newTestOutboxFixture(t)
+	updatedAt := time.Date(2026, time.July, 20, 12, 0, 0, 0, time.UTC)
+
+	failed, err := fixture.service.CreateMessage(t.Context(), outbox.CreateMessageParams{
+		ScheduledAt:         updatedAt.Add(-time.Hour),
+		Recipient:           "Failed recipient",
+		RecipientIdentifier: "failed-id",
+		Text:                "failed\ntext",
+	})
+	require.NoError(t, err)
+	err = updateStoredMessage(t, fixture.db, failed.ID, func(msg outbox.Message) outbox.Message {
+		msg.Status = outbox.MessageStatusFailed
+		msg.Attempt = msg.MaxAttempts
+		msg.LastError = "delivery \"failed\"\npermanently"
+		msg.UpdatedAt = updatedAt
+		return msg
+	})
+	require.NoError(t, err)
+
+	retry, err := fixture.service.CreateMessage(t.Context(), outbox.CreateMessageParams{
+		ScheduledAt:         updatedAt.Add(-2 * time.Hour),
+		Recipient:           "Retry recipient",
+		RecipientIdentifier: "retry-id",
+		Text:                "retry text",
+	})
+	require.NoError(t, err)
+	err = updateStoredMessage(t, fixture.db, retry.ID, func(msg outbox.Message) outbox.Message {
+		msg.Status = outbox.MessageStatusRetry
+		msg.Attempt = 2
+		msg.LastError = "temporary failure"
+		msg.UpdatedAt = updatedAt.Add(-time.Minute)
+		return msg
+	})
+	require.NoError(t, err)
+
+	poller := newTestPoller(t, fixture.service, location, []string{"/history 2"}, nil)
+
+	err = poller.Poll(t.Context())
+	require.NoError(t, err)
+
+	messages, err := loadAllMessages(t, fixture.db)
+	require.NoError(t, err)
+	require.Len(t, messages, 3)
+
+	reply := messages[len(messages)-1]
+	require.Equal(t, testAccount, reply.Recipient)
+	require.Equal(t, strings.Join([]string{
+		"History: 2",
+		strconv.FormatUint(failed.ID, 10) +
+			" | status: failed | scheduled: " + failed.ScheduledAt.In(location).Format("2006-01-02 15:04:05") + " (" + location.String() + ")" +
+			" | updated: " + updatedAt.In(location).Format("2006-01-02 15:04:05") + " (" + location.String() + ")" +
+			" | recipient: \"Failed recipient\" | attempts: 5/5 | last error: \"delivery \\\"failed\\\"\\npermanently\" | text: \"failed\\ntext\"",
+		strconv.FormatUint(retry.ID, 10) +
+			" | status: retry | scheduled: " + retry.ScheduledAt.In(location).Format("2006-01-02 15:04:05") + " (" + location.String() + ")" +
+			" | updated: " + updatedAt.Add(-time.Minute).In(location).Format("2006-01-02 15:04:05") + " (" + location.String() + ")" +
+			" | recipient: \"Retry recipient\" | attempts: 2/5 | last error: \"temporary failure\" | text: \"retry text\"",
+	}, "\n"), reply.Text)
+}
+
 func TestPoller_Poll_CancelCmd(t *testing.T) {
 	location, err := time.LoadLocation("Europe/Kyiv")
 	require.NoError(t, err)
@@ -312,6 +375,7 @@ func TestPoller_Poll_HelpCmd(t *testing.T) {
 func TestCommandName(t *testing.T) {
 	require.Equal(t, "help", commandName(helpCommand{}))
 	require.Equal(t, "upcoming", commandName(upcomingCommand{}))
+	require.Equal(t, "history", commandName(historyCommand{}))
 	require.Equal(t, "cancel", commandName(cancelCommand{}))
 	require.Equal(t, "schedule", commandName(scheduleCommand{}))
 	require.Equal(t, "unknown", commandName(testUnknownCommand{}))
@@ -492,4 +556,33 @@ func loadStoredMessageByID(t *testing.T, db *bolt.DB, id uint64) (outbox.Message
 	})
 
 	return msg, err
+}
+
+func updateStoredMessage(t *testing.T, db *bolt.DB, id uint64, fn func(outbox.Message) outbox.Message) error {
+	t.Helper()
+
+	return db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("outbox_messages"))
+		require.NotNil(t, bucket)
+
+		key := make([]byte, 8)
+		binary.BigEndian.PutUint64(key, id)
+
+		value := bucket.Get(key)
+		if value == nil {
+			return errbrick.ErrNotFound
+		}
+
+		var msg outbox.Message
+		if err := json.Unmarshal(value, &msg); err != nil {
+			return err
+		}
+
+		data, err := json.Marshal(fn(msg))
+		if err != nil {
+			return err
+		}
+
+		return bucket.Put(key, data)
+	})
 }

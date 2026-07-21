@@ -111,6 +111,41 @@ func (s *Service) LoadUpcomingMessages(_ context.Context) ([]Message, error) {
 	return messages, nil
 }
 
+// LoadHistoryMessages returns retained outbox messages ordered by most recent update.
+func (s *Service) LoadHistoryMessages(_ context.Context, limit int) ([]Message, error) {
+	if limit <= 0 {
+		return nil, fmt.Errorf("%w: history limit must be positive", errbrick.ErrInvalidData)
+	}
+
+	var messages []Message
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(outboxMessagesBucket)
+		if bucket == nil {
+			return errors.New("outbox messages bucket does not exist")
+		}
+
+		return bucket.ForEach(func(_, value []byte) error {
+			msg, err := decodeMessage(value)
+			if err != nil {
+				return err
+			}
+
+			messages = append(messages, msg)
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed load outbox history: %w", err)
+	}
+
+	sortHistoryMessages(messages)
+	if len(messages) > limit {
+		messages = messages[:limit]
+	}
+
+	return messages, nil
+}
+
 func (s *Service) CancelMessage(_ context.Context, id uint64) (Message, error) {
 	var cancelled Message
 
@@ -540,6 +575,23 @@ func sortMessages(messages []Message) {
 		case a.ID < b.ID:
 			return -1
 		case a.ID > b.ID:
+			return 1
+		default:
+			return 0
+		}
+	})
+}
+
+func sortHistoryMessages(messages []Message) {
+	slices.SortFunc(messages, func(a, b Message) int {
+		if cmp := b.UpdatedAt.Compare(a.UpdatedAt); cmp != 0 {
+			return cmp
+		}
+
+		switch {
+		case a.ID > b.ID:
+			return -1
+		case a.ID < b.ID:
 			return 1
 		default:
 			return 0

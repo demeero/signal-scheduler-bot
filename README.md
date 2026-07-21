@@ -52,7 +52,7 @@ This project exists for cases where:
 The service runs two independent workers:
 
 1. The command worker polls incoming messages from your `Note to Self` chat.
-2. It parses supported commands such as `/schedule`, `/upcoming`, `/cancel`, and `/help`.
+2. It parses supported commands such as `/schedule`, `/upcoming`, `/history`, `/cancel`, and `/help`.
 3. When you schedule a message, the bot resolves the recipient through `signal-rest-api` and stores the scheduled message in BoltDB.
 4. The scheduler worker periodically scans stored messages and sends the ones that are due.
 5. If delivery fails temporarily, the message is retried.
@@ -213,6 +213,7 @@ The bot only reacts to commands sent to your own `Note to Self` chat.
 /schedule today HH:mm "Contact Name" Message text
 
 /upcoming
+/history [LIMIT]
 /cancel MESSAGE_ID
 /help
 ```
@@ -237,6 +238,13 @@ List upcoming messages:
 /upcoming
 ```
 
+Inspect retained delivery history (20 most recently updated records by default):
+
+```text
+/history
+/history 50
+```
+
 Cancel a scheduled message:
 
 ```text
@@ -250,6 +258,8 @@ Cancel a scheduled message:
 - Recipients must already exist in Signal contacts.
 - Contact names may be quoted with regular double quotes or typographic quotes.
 - The bot stores both the original recipient text and the resolved recipient identifier.
+- `/history [LIMIT]` lists all retained outbox records, including bot replies, newest state changes first. `LIMIT` must be between 1 and 100.
+- History rows include delivery status, attempts, the last error, and the stored message text. Sent, failed, and cancelled records remain visible until vacuum removes them after `OUTBOX_VACUUM_RETENTION`.
 
 ## Configuration
 

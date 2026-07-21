@@ -81,6 +81,63 @@ func TestService_LoadUpcomingMessages(t *testing.T) {
 	require.EqualValues(t, 5, messages[1].MaxAttempts)
 }
 
+func TestService_LoadHistoryMessages(t *testing.T) {
+	fixture := newServiceFixture(t)
+	updatedAt := time.Date(2026, time.July, 20, 12, 0, 0, 0, time.UTC)
+
+	type testMessage struct {
+		updatedAt time.Time
+		status    MessageStatus
+		lastError string
+		attempt   uint16
+	}
+	testMessages := []testMessage{
+		{status: MessageStatusPending, updatedAt: updatedAt.Add(-2 * time.Minute)},
+		{status: MessageStatusRetry, updatedAt: updatedAt.Add(-time.Minute), attempt: 1, lastError: "temporary"},
+		{status: MessageStatusSent, updatedAt: updatedAt.Add(-2 * time.Minute), attempt: 1},
+		{status: MessageStatusFailed, updatedAt: updatedAt, attempt: 5, lastError: "permanent"},
+		{status: MessageStatusCancelled, updatedAt: updatedAt.Add(-3 * time.Minute)},
+	}
+
+	created := make([]Message, 0, len(testMessages))
+	for _, testMessage := range testMessages {
+		msg, err := fixture.service.CreateMessage(t.Context(), CreateMessageParams{
+			ScheduledAt:         updatedAt.Add(time.Hour),
+			Recipient:           string(testMessage.status),
+			RecipientIdentifier: string(testMessage.status) + "-id",
+			Text:                string(testMessage.status) + " text",
+		})
+		require.NoError(t, err)
+
+		err = updateStoredMessage(t, fixture.db, msg.ID, func(stored Message) Message {
+			stored.Status = testMessage.status
+			stored.UpdatedAt = testMessage.updatedAt
+			stored.Attempt = testMessage.attempt
+			stored.LastError = testMessage.lastError
+			return stored
+		})
+		require.NoError(t, err)
+		created = append(created, msg)
+	}
+
+	messages, err := fixture.service.LoadHistoryMessages(t.Context(), 10)
+	require.NoError(t, err)
+	require.Equal(t, []uint64{
+		created[3].ID,
+		created[1].ID,
+		created[2].ID,
+		created[0].ID,
+		created[4].ID,
+	}, messageIDs(messages))
+
+	limited, err := fixture.service.LoadHistoryMessages(t.Context(), 3)
+	require.NoError(t, err)
+	require.Equal(t, []uint64{created[3].ID, created[1].ID, created[2].ID}, messageIDs(limited))
+
+	_, err = fixture.service.LoadHistoryMessages(t.Context(), 0)
+	require.ErrorIs(t, err, errbrick.ErrInvalidData)
+}
+
 func TestService_CancelMessage(t *testing.T) {
 	fixture := newServiceFixture(t)
 
@@ -746,4 +803,13 @@ func updateStoredMessage(t *testing.T, db *bolt.DB, id uint64, fn func(Message) 
 
 		return bucket.Put(outboxMessageKey(id), data)
 	})
+}
+
+func messageIDs(messages []Message) []uint64 {
+	ids := make([]uint64, 0, len(messages))
+	for _, msg := range messages {
+		ids = append(ids, msg.ID)
+	}
+
+	return ids
 }

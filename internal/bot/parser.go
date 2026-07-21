@@ -12,10 +12,13 @@ import (
 )
 
 const (
-	commandCancel   = "/cancel"
-	commandHelp     = "/help"
-	commandUpcoming = "/upcoming"
-	commandSchedule = "/schedule"
+	commandCancel       = "/cancel"
+	commandHelp         = "/help"
+	commandHistory      = "/history"
+	commandUpcoming     = "/upcoming"
+	commandSchedule     = "/schedule"
+	defaultHistoryLimit = 20
+	maximumHistoryLimit = 100
 )
 
 // parser parses raw bot commands into transport-local command values.
@@ -47,6 +50,8 @@ func (p *parser) Parse(raw string, now time.Time) (parsedCommand, error) {
 			return nil, fmt.Errorf("%w: unsupported command", errbrick.ErrInvalidData)
 		}
 		return upcomingCommand{}, nil
+	case commandHistory:
+		return parseHistory(args)
 	case commandCancel:
 		return parseCancel(args)
 	case commandSchedule:
@@ -54,6 +59,31 @@ func (p *parser) Parse(raw string, now time.Time) (parsedCommand, error) {
 	default:
 		return nil, fmt.Errorf("%w: unsupported command", errbrick.ErrInvalidData)
 	}
+}
+
+func parseHistory(args string) (parsedCommand, error) {
+	args = strings.TrimSpace(args)
+	if args == "" {
+		return historyCommand{limit: defaultHistoryLimit}, nil
+	}
+
+	limitText, remainder, err := cutFieldOrRemainder(args)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid history limit", errbrick.ErrInvalidData)
+	}
+	if strings.TrimSpace(remainder) != "" {
+		return nil, fmt.Errorf("%w: history accepts at most one limit", errbrick.ErrInvalidData)
+	}
+
+	limit, err := strconv.ParseUint(limitText, 10, 16)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid history limit %q: %w", errbrick.ErrInvalidData, limitText, err)
+	}
+	if limit == 0 || limit > maximumHistoryLimit {
+		return nil, fmt.Errorf("%w: history limit must be between 1 and %d", errbrick.ErrInvalidData, maximumHistoryLimit)
+	}
+
+	return historyCommand{limit: int(limit)}, nil
 }
 
 func parseCancel(args string) (parsedCommand, error) {

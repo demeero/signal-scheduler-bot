@@ -16,6 +16,12 @@ type upcomingCommand struct{}
 
 func (upcomingCommand) isCommand() {}
 
+type historyCommand struct {
+	limit int
+}
+
+func (historyCommand) isCommand() {}
+
 type cancelCommand struct {
 	id uint64
 }
@@ -36,6 +42,8 @@ func commandName(cmd parsedCommand) string {
 		return "help"
 	case upcomingCommand:
 		return "upcoming"
+	case historyCommand:
+		return "history"
 	case cancelCommand:
 		return "cancel"
 	case scheduleCommand:
