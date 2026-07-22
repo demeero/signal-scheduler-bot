@@ -83,17 +83,17 @@ func run(ctx context.Context, cfg config.Config) error {
 
 	signalAdapter := signaladapter.New(cfg.Signal.Account, cfg.Signal.APIBaseURL, &http.Client{Timeout: cfg.Signal.RequestTimeout})
 
-	outboxSvc, err := outbox.New(cfg.Outbox.MaxAttempts, cfg.Outbox.MaxAge, cfg.Outbox.VacuumRetention, db, signalAdapter)
+	outbox, err := outbox.New(cfg.Outbox.MaxAttempts, cfg.Outbox.MaxAge, cfg.Outbox.VacuumRetention, db, signalAdapter)
 	if err != nil {
 		return fmt.Errorf("failed init outbox service: %w", err)
 	}
 
-	botPoller := bot.New(cfg.Signal.Account, location, signalAdapter, outboxSvc)
+	botPoller := bot.New(cfg.Signal.Account, location, signalAdapter, outbox.Queries, outbox.Commands.Create, outbox.Commands.Cancel)
 
 	var wg sync.WaitGroup
 	runPeriodicWorker(ctx, &wg, "inbound polling", cfg.Bot.PollInterval, botPoller.Poll)
-	runPeriodicWorker(ctx, &wg, "outbox sending", cfg.Outbox.WorkerInterval, outboxSvc.SendDue)
-	runPeriodicWorker(ctx, &wg, "outbox vacuum", cfg.Outbox.VacuumInterval, outboxSvc.Vacuum)
+	runPeriodicWorker(ctx, &wg, "outbox sending", cfg.Outbox.WorkerInterval, outbox.Commands.SendDue.Exec)
+	runPeriodicWorker(ctx, &wg, "outbox vacuum", cfg.Outbox.VacuumInterval, outbox.Commands.Vacuum.Exec)
 
 	<-ctx.Done()
 	wg.Wait()

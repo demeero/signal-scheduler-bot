@@ -15,7 +15,6 @@ User-facing setup and usage belong in [`README.md`](/Users/demeero/workspace/sig
 
 - Keep the project small, explicit, and easy to modify.
 - Prefer straightforward code over abstractions.
-- Do not introduce DDD, Hexagonal Architecture, Clean Architecture, CQRS, Event Sourcing, or similar enterprise patterns.
 - Do not add web UI, multi-user flows, or generic automation-platform concepts unless explicitly requested.
 
 ## Implementation Shape
@@ -64,6 +63,7 @@ When changing behavior, prefer updating README for user-visible changes instead 
 - Use singular, lowercase package names.
 - Export only identifiers that are needed outside the package.
 - Keep config, logging, and naming consistent with the existing code.
+- Use keyed struct literals (`Field: value`); do not use positional struct literals, so reordering fields cannot silently change behavior.
 
 ## Error Handling
 
