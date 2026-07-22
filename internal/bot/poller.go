@@ -3,30 +3,44 @@ package bot
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/demeero/signal-scheduler-bot/internal/errbrick"
 	"github.com/demeero/signal-scheduler-bot/internal/logbrick"
 	"github.com/demeero/signal-scheduler-bot/internal/outbox"
+	"github.com/demeero/signal-scheduler-bot/internal/outbox/command"
+	"github.com/demeero/signal-scheduler-bot/internal/outbox/domain"
 	"github.com/demeero/signal-scheduler-bot/internal/signaladapter"
 )
 
 type Poller struct {
-	signalClient *signaladapter.SignalAdapter
-	parser       *parser
-	outboxSvc    *outbox.Service
-	location     *time.Location
-	account      string
+	signalClient     *signaladapter.SignalAdapter
+	parser           *parser
+	outboxQuerySvc   *outbox.QueryService
+	createMessageCmd *command.CreateMessage
+	cancelMessageCmd *command.CancelMessage
+	location         *time.Location
+	account          string
 }
 
-func New(account string, location *time.Location, signalClient *signaladapter.SignalAdapter, outboxSvc *outbox.Service) *Poller {
+func New(
+	account string,
+	location *time.Location,
+	signalAdapter *signaladapter.SignalAdapter,
+	outboxQuerySvc *outbox.QueryService,
+	createMsgCmd *command.CreateMessage,
+	cancelMsgCmd *command.CancelMessage,
+) *Poller {
 	return &Poller{
-		account:      account,
-		signalClient: signalClient,
-		parser:       newParser(location),
-		outboxSvc:    outboxSvc,
-		location:     location,
+		account:          account,
+		signalClient:     signalAdapter,
+		parser:           newParser(location),
+		outboxQuerySvc:   outboxQuerySvc,
+		createMessageCmd: createMsgCmd,
+		cancelMessageCmd: cancelMsgCmd,
+		location:         location,
 	}
 }
 
@@ -79,6 +93,8 @@ func (p *Poller) handleCmd(ctx context.Context, cmd parsedCommand) error {
 		return p.handleHelpCmd(ctx)
 	case upcomingCommand:
 		return p.handleUpcomingCmd(ctx)
+	case historyCommand:
+		return p.handleHistoryCmd(ctx, c)
 	case cancelCommand:
 		return p.handleCancelCmd(ctx, c)
 	case scheduleCommand:
@@ -89,7 +105,7 @@ func (p *Poller) handleCmd(ctx context.Context, cmd parsedCommand) error {
 }
 
 func (p *Poller) handleUpcomingCmd(ctx context.Context) error {
-	messages, err := p.outboxSvc.LoadUpcomingMessages(ctx)
+	messages, err := p.outboxQuerySvc.LoadUpcomingMessages(ctx)
 	if err != nil {
 		return fmt.Errorf("failed list outbox messages: %w", err)
 	}
@@ -110,8 +126,23 @@ func (p *Poller) handleUpcomingCmd(ctx context.Context) error {
 	return p.queueSelfOutboxMessage(ctx, strings.Join(lines, "\n"))
 }
 
+func (p *Poller) handleHistoryCmd(ctx context.Context, cmd historyCommand) error {
+	messages, err := p.outboxQuerySvc.LoadHistoryMessages(ctx, cmd.limit)
+	if err != nil {
+		return fmt.Errorf("failed load outbox history: %w", err)
+	}
+
+	lines := make([]string, 0, len(messages)+1)
+	lines = append(lines, fmt.Sprintf("History: %d", len(messages)))
+	for _, msg := range messages {
+		lines = append(lines, formatHistoryLine(p.location, msg))
+	}
+
+	return p.queueSelfOutboxMessage(ctx, strings.Join(lines, "\n"))
+}
+
 func (p *Poller) handleCancelCmd(ctx context.Context, cmd cancelCommand) error {
-	_, err := p.outboxSvc.CancelMessage(ctx, cmd.id)
+	_, err := p.cancelMessageCmd.Exec(ctx, cmd.id)
 	if err != nil {
 		return fmt.Errorf("failed cancel outbox message: %w", err)
 	}
@@ -125,13 +156,13 @@ func (p *Poller) handleScheduleCmd(ctx context.Context, cmd scheduleCommand) err
 		return fmt.Errorf("failed resolve recipient: %w", err)
 	}
 
-	params := outbox.CreateMessageParams{
+	params := command.CreateMessageParams{
 		ScheduledAt:         cmd.When,
 		Recipient:           cmd.Recipient,
 		RecipientIdentifier: recipientIdentifier,
 		Text:                cmd.Text,
 	}
-	outboxMessage, err := p.outboxSvc.CreateMessage(ctx, params)
+	outboxMessage, err := p.createMessageCmd.Exec(ctx, params)
 	if err != nil {
 		return fmt.Errorf("failed create outbox message: %w", err)
 	}
@@ -162,6 +193,8 @@ func (p *Poller) handleHelpCmd(ctx context.Context) error {
 		"",
 		commandUpcoming,
 		"",
+		commandHistory + " [LIMIT]",
+		"",
 		"/cancel MESSAGE_ID",
 		"",
 		"/help",
@@ -176,17 +209,39 @@ func (p *Poller) queueSelfOutboxErr(ctx context.Context, err error) {
 }
 
 func (p *Poller) queueSelfOutboxMessage(ctx context.Context, text string) error {
-	params := outbox.CreateMessageParams{
+	params := command.CreateMessageParams{
 		ScheduledAt:         time.Now().UTC(),
 		Recipient:           p.account,
 		RecipientIdentifier: p.account,
 		Text:                text,
 	}
-	if _, err := p.outboxSvc.CreateMessage(ctx, params); err != nil {
+	if _, err := p.createMessageCmd.Exec(ctx, params); err != nil {
 		return fmt.Errorf("failed queue self message: %w", err)
 	}
 
 	logbrick.FromCtx(ctx).Debug("self outbox message queued", "msg", text)
 
 	return nil
+}
+
+func formatHistoryLine(location *time.Location, msg domain.Message) string {
+	lastError := "-"
+	if msg.LastError != "" {
+		lastError = strconv.Quote(msg.LastError)
+	}
+
+	return strings.Join([]string{
+		strconv.FormatUint(msg.ID, 10),
+		"status: " + string(msg.Status),
+		"scheduled: " + formatHistoryTime(location, msg.ScheduledAt),
+		"updated: " + formatHistoryTime(location, msg.UpdatedAt),
+		"recipient: " + strconv.Quote(msg.Recipient),
+		fmt.Sprintf("attempts: %d/%d", msg.Attempt, msg.MaxAttempts),
+		"last error: " + lastError,
+		"text: " + strconv.Quote(msg.Text),
+	}, " | ")
+}
+
+func formatHistoryTime(location *time.Location, value time.Time) string {
+	return value.In(location).Format("2006-01-02 15:04:05") + " (" + location.String() + ")"
 }

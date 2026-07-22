@@ -19,6 +19,84 @@ func TestParser_Parse_Upcoming(t *testing.T) {
 	require.Equal(t, upcomingCommand{}, cmd)
 }
 
+func TestParser_Parse_History(t *testing.T) {
+	parser := newTestParser(t)
+	now := time.Date(2026, time.July, 12, 9, 0, 0, 0, time.UTC)
+
+	testCases := []struct {
+		name  string
+		input string
+		limit int
+	}{
+		{
+			name:  "default limit",
+			input: "/history",
+			limit: defaultHistoryLimit,
+		},
+		{
+			name:  "explicit limit",
+			input: "/history 100",
+			limit: maximumHistoryLimit,
+		},
+		{
+			name:  "whitespace after verb",
+			input: "/history\t42",
+			limit: 42,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			parsed, err := parser.Parse(tc.input, now)
+			require.NoError(t, err)
+
+			cmd, ok := parsed.(historyCommand)
+			require.True(t, ok)
+			require.Equal(t, tc.limit, cmd.limit)
+		})
+	}
+}
+
+func TestParser_Parse_HistoryRejectsInvalidLimit(t *testing.T) {
+	parser := newTestParser(t)
+	now := time.Date(2026, time.July, 12, 9, 0, 0, 0, time.UTC)
+
+	testCases := []struct {
+		name        string
+		input       string
+		errContains string
+	}{
+		{
+			name:        "zero",
+			input:       "/history 0",
+			errContains: "history limit must be between 1 and 100",
+		},
+		{
+			name:        "too large",
+			input:       "/history 101",
+			errContains: "history limit must be between 1 and 100",
+		},
+		{
+			name:        "not a number",
+			input:       "/history abc",
+			errContains: `invalid history limit "abc"`,
+		},
+		{
+			name:        "more than one argument",
+			input:       "/history 1 2",
+			errContains: "history accepts at most one limit",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parser.Parse(tc.input, now)
+			require.ErrorIs(t, err, errbrick.ErrInvalidData)
+			require.ErrorContains(t, err, tc.errContains)
+		})
+	}
+}
+
 func TestParser_Parse_Cancel(t *testing.T) {
 	parser := newTestParser(t)
 

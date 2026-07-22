@@ -1,8 +1,8 @@
-package outbox
+package domain
 
 import (
-	"encoding/binary"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -33,7 +33,7 @@ type Message struct {
 	ID                  uint64        `json:"id"`
 }
 
-func newMessage(id uint64, scheduledAt time.Time, recipient, recipientIdentifier, text string, maxAttempts uint16) (Message, error) {
+func NewMessage(id uint64, scheduledAt time.Time, recipient, recipientIdentifier, text string, maxAttempts uint16) (Message, error) {
 	if scheduledAt.IsZero() {
 		return Message{}, fmt.Errorf("%w: scheduledAt empty", errbrick.ErrInvalidData)
 	}
@@ -203,13 +203,36 @@ func (m Message) MarkExpired(now time.Time, maxAge time.Duration) (Message, erro
 	return m, nil
 }
 
-func (m Message) key() []byte {
-	return outboxMessageKey(m.ID)
+func SortMessagesByScheduledAt(messages []Message) {
+	slices.SortFunc(messages, func(a, b Message) int {
+		if cmp := a.ScheduledAt.Compare(b.ScheduledAt); cmp != 0 {
+			return cmp
+		}
+
+		switch {
+		case a.ID < b.ID:
+			return -1
+		case a.ID > b.ID:
+			return 1
+		default:
+			return 0
+		}
+	})
 }
 
-func outboxMessageKey(id uint64) []byte {
-	key := make([]byte, 8)
-	binary.BigEndian.PutUint64(key, id)
+func SortMessagesByUpdatedAt(messages []Message) {
+	slices.SortFunc(messages, func(a, b Message) int {
+		if cmp := b.UpdatedAt.Compare(a.UpdatedAt); cmp != 0 {
+			return cmp
+		}
 
-	return key
+		switch {
+		case a.ID > b.ID:
+			return -1
+		case a.ID < b.ID:
+			return 1
+		default:
+			return 0
+		}
+	})
 }

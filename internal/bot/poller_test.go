@@ -14,6 +14,8 @@ import (
 
 	"github.com/demeero/signal-scheduler-bot/internal/errbrick"
 	"github.com/demeero/signal-scheduler-bot/internal/outbox"
+	"github.com/demeero/signal-scheduler-bot/internal/outbox/command"
+	"github.com/demeero/signal-scheduler-bot/internal/outbox/domain"
 	"github.com/demeero/signal-scheduler-bot/internal/signaladapter"
 	"github.com/stretchr/testify/require"
 	bolt "go.etcd.io/bbolt"
@@ -24,7 +26,7 @@ func TestPoller_Poll_UpcomingNoUpcomingMessages(t *testing.T) {
 	require.NoError(t, err)
 
 	fixture := newTestOutboxFixture(t)
-	_, err = fixture.service.CreateMessage(t.Context(), outbox.CreateMessageParams{
+	_, err = fixture.outbox.Commands.Create.Exec(t.Context(), command.CreateMessageParams{
 		ScheduledAt:         time.Now().UTC().Add(-time.Minute),
 		Recipient:           "+380500000000",
 		RecipientIdentifier: "+380500000000",
@@ -32,7 +34,7 @@ func TestPoller_Poll_UpcomingNoUpcomingMessages(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	poller := newTestPoller(t, fixture.service, location, []string{"/upcoming"}, nil)
+	poller := newTestPoller(t, fixture.outbox, location, []string{"/upcoming"}, nil)
 
 	err = poller.Poll(t.Context())
 	require.NoError(t, err)
@@ -53,7 +55,7 @@ func TestPoller_Poll_UpcomingListsFuturePendingMessages(t *testing.T) {
 	fixture := newTestOutboxFixture(t)
 	now := time.Now().UTC()
 
-	later, err := fixture.service.CreateMessage(t.Context(), outbox.CreateMessageParams{
+	later, err := fixture.outbox.Commands.Create.Exec(t.Context(), command.CreateMessageParams{
 		ScheduledAt:         now.Add(3 * time.Hour),
 		Recipient:           "Later",
 		RecipientIdentifier: "later-id",
@@ -61,7 +63,7 @@ func TestPoller_Poll_UpcomingListsFuturePendingMessages(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	earlier, err := fixture.service.CreateMessage(t.Context(), outbox.CreateMessageParams{
+	earlier, err := fixture.outbox.Commands.Create.Exec(t.Context(), command.CreateMessageParams{
 		ScheduledAt:         now.Add(90 * time.Minute),
 		Recipient:           "Earlier",
 		RecipientIdentifier: "earlier-id",
@@ -69,7 +71,7 @@ func TestPoller_Poll_UpcomingListsFuturePendingMessages(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	sameTime, err := fixture.service.CreateMessage(t.Context(), outbox.CreateMessageParams{
+	sameTime, err := fixture.outbox.Commands.Create.Exec(t.Context(), command.CreateMessageParams{
 		ScheduledAt:         earlier.ScheduledAt,
 		Recipient:           "SameTime",
 		RecipientIdentifier: "same-time-id",
@@ -77,7 +79,7 @@ func TestPoller_Poll_UpcomingListsFuturePendingMessages(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = fixture.service.CreateMessage(t.Context(), outbox.CreateMessageParams{
+	_, err = fixture.outbox.Commands.Create.Exec(t.Context(), command.CreateMessageParams{
 		ScheduledAt:         now.Add(-5 * time.Minute),
 		Recipient:           "Past",
 		RecipientIdentifier: "past-id",
@@ -85,7 +87,7 @@ func TestPoller_Poll_UpcomingListsFuturePendingMessages(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	poller := newTestPoller(t, fixture.service, location, []string{"/upcoming"}, nil)
+	poller := newTestPoller(t, fixture.outbox, location, []string{"/upcoming"}, nil)
 
 	err = poller.Poll(t.Context())
 	require.NoError(t, err)
@@ -109,7 +111,7 @@ func TestPoller_Poll_UpcomingHidesOverduePendingMessages(t *testing.T) {
 	require.NoError(t, err)
 
 	fixture := newTestOutboxFixture(t)
-	_, err = fixture.service.CreateMessage(t.Context(), outbox.CreateMessageParams{
+	_, err = fixture.outbox.Commands.Create.Exec(t.Context(), command.CreateMessageParams{
 		ScheduledAt:         time.Now().UTC().Add(-30 * time.Second),
 		Recipient:           "Overdue",
 		RecipientIdentifier: "overdue-id",
@@ -117,12 +119,12 @@ func TestPoller_Poll_UpcomingHidesOverduePendingMessages(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	poller := newTestPoller(t, fixture.service, location, []string{"/upcoming"}, nil)
+	poller := newTestPoller(t, fixture.outbox, location, []string{"/upcoming"}, nil)
 
 	err = poller.Poll(t.Context())
 	require.NoError(t, err)
 
-	upcoming, err := fixture.service.LoadUpcomingMessages(t.Context())
+	upcoming, err := fixture.outbox.Queries.LoadUpcomingMessages(t.Context())
 	require.NoError(t, err)
 	require.Empty(t, upcoming)
 
@@ -134,12 +136,75 @@ func TestPoller_Poll_UpcomingHidesOverduePendingMessages(t *testing.T) {
 	require.Equal(t, "Upcoming messages: 0", reply.Text)
 }
 
+func TestPoller_Poll_HistoryListsDeliveryDetails(t *testing.T) {
+	location, err := time.LoadLocation("Europe/Kyiv")
+	require.NoError(t, err)
+
+	fixture := newTestOutboxFixture(t)
+	updatedAt := time.Date(2026, time.July, 20, 12, 0, 0, 0, time.UTC)
+
+	failed, err := fixture.outbox.Commands.Create.Exec(t.Context(), command.CreateMessageParams{
+		ScheduledAt:         updatedAt.Add(-time.Hour),
+		Recipient:           "Failed recipient",
+		RecipientIdentifier: "failed-id",
+		Text:                "failed\ntext",
+	})
+	require.NoError(t, err)
+	err = updateStoredMessage(t, fixture.db, failed.ID, func(msg domain.Message) domain.Message {
+		msg.Status = domain.MessageStatusFailed
+		msg.Attempt = msg.MaxAttempts
+		msg.LastError = "delivery \"failed\"\npermanently"
+		msg.UpdatedAt = updatedAt
+		return msg
+	})
+	require.NoError(t, err)
+
+	retry, err := fixture.outbox.Commands.Create.Exec(t.Context(), command.CreateMessageParams{
+		ScheduledAt:         updatedAt.Add(-2 * time.Hour),
+		Recipient:           "Retry recipient",
+		RecipientIdentifier: "retry-id",
+		Text:                "retry text",
+	})
+	require.NoError(t, err)
+	err = updateStoredMessage(t, fixture.db, retry.ID, func(msg domain.Message) domain.Message {
+		msg.Status = domain.MessageStatusRetry
+		msg.Attempt = 2
+		msg.LastError = "temporary failure"
+		msg.UpdatedAt = updatedAt.Add(-time.Minute)
+		return msg
+	})
+	require.NoError(t, err)
+
+	poller := newTestPoller(t, fixture.outbox, location, []string{"/history 2"}, nil)
+
+	err = poller.Poll(t.Context())
+	require.NoError(t, err)
+
+	messages, err := loadAllMessages(t, fixture.db)
+	require.NoError(t, err)
+	require.Len(t, messages, 3)
+
+	reply := messages[len(messages)-1]
+	require.Equal(t, testAccount, reply.Recipient)
+	require.Equal(t, strings.Join([]string{
+		"History: 2",
+		strconv.FormatUint(failed.ID, 10) +
+			" | status: failed | scheduled: " + failed.ScheduledAt.In(location).Format("2006-01-02 15:04:05") + " (" + location.String() + ")" +
+			" | updated: " + updatedAt.In(location).Format("2006-01-02 15:04:05") + " (" + location.String() + ")" +
+			" | recipient: \"Failed recipient\" | attempts: 5/5 | last error: \"delivery \\\"failed\\\"\\npermanently\" | text: \"failed\\ntext\"",
+		strconv.FormatUint(retry.ID, 10) +
+			" | status: retry | scheduled: " + retry.ScheduledAt.In(location).Format("2006-01-02 15:04:05") + " (" + location.String() + ")" +
+			" | updated: " + updatedAt.Add(-time.Minute).In(location).Format("2006-01-02 15:04:05") + " (" + location.String() + ")" +
+			" | recipient: \"Retry recipient\" | attempts: 2/5 | last error: \"temporary failure\" | text: \"retry text\"",
+	}, "\n"), reply.Text)
+}
+
 func TestPoller_Poll_CancelCmd(t *testing.T) {
 	location, err := time.LoadLocation("Europe/Kyiv")
 	require.NoError(t, err)
 
 	fixture := newTestOutboxFixture(t)
-	created, err := fixture.service.CreateMessage(t.Context(), outbox.CreateMessageParams{
+	created, err := fixture.outbox.Commands.Create.Exec(t.Context(), command.CreateMessageParams{
 		ScheduledAt:         time.Now().UTC().Add(time.Hour),
 		Recipient:           "Future",
 		RecipientIdentifier: "future-id",
@@ -149,7 +214,7 @@ func TestPoller_Poll_CancelCmd(t *testing.T) {
 
 	poller := newTestPoller(
 		t,
-		fixture.service,
+		fixture.outbox,
 		location,
 		[]string{"/cancel " + strconv.FormatUint(created.ID, 10)},
 		nil,
@@ -160,7 +225,7 @@ func TestPoller_Poll_CancelCmd(t *testing.T) {
 
 	stored, err := loadStoredMessageByID(t, fixture.db, created.ID)
 	require.NoError(t, err)
-	require.Equal(t, outbox.MessageStatusCancelled, stored.Status)
+	require.Equal(t, domain.MessageStatusCancelled, stored.Status)
 
 	messages, err := loadAllMessages(t, fixture.db)
 	require.NoError(t, err)
@@ -176,7 +241,7 @@ func TestPoller_Poll_CancelCmdReturnsNotFound(t *testing.T) {
 	require.NoError(t, err)
 
 	fixture := newTestOutboxFixture(t)
-	poller := newTestPoller(t, fixture.service, location, []string{"/cancel 42"}, nil)
+	poller := newTestPoller(t, fixture.outbox, location, []string{"/cancel 42"}, nil)
 
 	err = poller.Poll(t.Context())
 	require.NoError(t, err)
@@ -196,7 +261,7 @@ func TestPoller_Poll_CancelCmdReturnsConflict(t *testing.T) {
 	require.NoError(t, err)
 
 	fixture := newTestOutboxFixture(t)
-	created, err := fixture.service.CreateMessage(t.Context(), outbox.CreateMessageParams{
+	created, err := fixture.outbox.Commands.Create.Exec(t.Context(), command.CreateMessageParams{
 		ScheduledAt:         time.Now().UTC().Add(-time.Minute),
 		Recipient:           "Past",
 		RecipientIdentifier: "past-id",
@@ -206,7 +271,7 @@ func TestPoller_Poll_CancelCmdReturnsConflict(t *testing.T) {
 
 	poller := newTestPoller(
 		t,
-		fixture.service,
+		fixture.outbox,
 		location,
 		[]string{"/cancel " + strconv.FormatUint(created.ID, 10)},
 		nil,
@@ -217,7 +282,7 @@ func TestPoller_Poll_CancelCmdReturnsConflict(t *testing.T) {
 
 	stored, err := loadStoredMessageByID(t, fixture.db, created.ID)
 	require.NoError(t, err)
-	require.Equal(t, outbox.MessageStatusPending, stored.Status)
+	require.Equal(t, domain.MessageStatusPending, stored.Status)
 
 	messages, err := loadAllMessages(t, fixture.db)
 	require.NoError(t, err)
@@ -249,7 +314,7 @@ func TestPoller_Poll_ScheduleCmd(t *testing.T) {
 
 	poller := newTestPoller(
 		t,
-		fixture.service,
+		fixture.outbox,
 		location,
 		[]string{fmt.Sprintf(
 			`/schedule %s %s "Alice Smith" Hello there`,
@@ -296,7 +361,7 @@ func TestPoller_Poll_HelpCmd(t *testing.T) {
 	require.NoError(t, err)
 
 	fixture := newTestOutboxFixture(t)
-	poller := newTestPoller(t, fixture.service, location, []string{"/help"}, nil)
+	poller := newTestPoller(t, fixture.outbox, location, []string{"/help"}, nil)
 
 	err = poller.Poll(t.Context())
 	require.NoError(t, err)
@@ -312,14 +377,15 @@ func TestPoller_Poll_HelpCmd(t *testing.T) {
 func TestCommandName(t *testing.T) {
 	require.Equal(t, "help", commandName(helpCommand{}))
 	require.Equal(t, "upcoming", commandName(upcomingCommand{}))
+	require.Equal(t, "history", commandName(historyCommand{}))
 	require.Equal(t, "cancel", commandName(cancelCommand{}))
 	require.Equal(t, "schedule", commandName(scheduleCommand{}))
 	require.Equal(t, "unknown", commandName(testUnknownCommand{}))
 }
 
 type testOutboxFixture struct {
-	db      *bolt.DB
-	service *outbox.Service
+	db     *bolt.DB
+	outbox *outbox.Outbox
 }
 
 const testAccount = "+380999999999"
@@ -356,18 +422,18 @@ func newTestOutboxFixture(t *testing.T) testOutboxFixture {
 		}),
 	})
 
-	service, err := outbox.New(5, 15*time.Minute, 30*24*time.Hour, db, signalClient)
+	box, err := outbox.New(5, 15*time.Minute, 30*24*time.Hour, db, signalClient)
 	require.NoError(t, err)
 
 	return testOutboxFixture{
-		db:      db,
-		service: service,
+		db:     db,
+		outbox: box,
 	}
 }
 
 func newTestPoller(
 	t *testing.T,
-	outboxSvc *outbox.Service,
+	box *outbox.Outbox,
 	location *time.Location,
 	receiveBodies []string,
 	contacts []map[string]string,
@@ -404,7 +470,7 @@ func newTestPoller(
 			return recorder.Result(), nil
 		}),
 	})
-	return New(testAccount, location, signalClient, outboxSvc)
+	return New(testAccount, location, signalClient, box.Queries, box.Commands.Create, box.Commands.Cancel)
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -441,7 +507,7 @@ func writeReceiveMessagesJSON(t *testing.T, w http.ResponseWriter, account strin
 	}
 }
 
-func formatUpcomingLine(location *time.Location, msg outbox.Message) string {
+func formatUpcomingLine(location *time.Location, msg domain.Message) string {
 	return strings.Join([]string{
 		strconv.FormatUint(msg.ID, 10),
 		msg.ScheduledAt.In(location).Format("2006-01-02 15:04") + " (" + location.String() + ")",
@@ -450,16 +516,16 @@ func formatUpcomingLine(location *time.Location, msg outbox.Message) string {
 	}, " | ")
 }
 
-func loadAllMessages(t *testing.T, db *bolt.DB) ([]outbox.Message, error) {
+func loadAllMessages(t *testing.T, db *bolt.DB) ([]domain.Message, error) {
 	t.Helper()
 
-	messages := make([]outbox.Message, 0)
+	messages := make([]domain.Message, 0)
 	err := db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("outbox_messages"))
 		require.NotNil(t, bucket)
 
 		return bucket.ForEach(func(_, value []byte) error {
-			var msg outbox.Message
+			var msg domain.Message
 			if err := json.Unmarshal(value, &msg); err != nil {
 				return err
 			}
@@ -472,10 +538,10 @@ func loadAllMessages(t *testing.T, db *bolt.DB) ([]outbox.Message, error) {
 	return messages, err
 }
 
-func loadStoredMessageByID(t *testing.T, db *bolt.DB, id uint64) (outbox.Message, error) {
+func loadStoredMessageByID(t *testing.T, db *bolt.DB, id uint64) (domain.Message, error) {
 	t.Helper()
 
-	var msg outbox.Message
+	var msg domain.Message
 	err := db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("outbox_messages"))
 		require.NotNil(t, bucket)
@@ -492,4 +558,33 @@ func loadStoredMessageByID(t *testing.T, db *bolt.DB, id uint64) (outbox.Message
 	})
 
 	return msg, err
+}
+
+func updateStoredMessage(t *testing.T, db *bolt.DB, id uint64, fn func(domain.Message) domain.Message) error {
+	t.Helper()
+
+	return db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("outbox_messages"))
+		require.NotNil(t, bucket)
+
+		key := make([]byte, 8)
+		binary.BigEndian.PutUint64(key, id)
+
+		value := bucket.Get(key)
+		if value == nil {
+			return errbrick.ErrNotFound
+		}
+
+		var msg domain.Message
+		if err := json.Unmarshal(value, &msg); err != nil {
+			return err
+		}
+
+		data, err := json.Marshal(fn(msg))
+		if err != nil {
+			return err
+		}
+
+		return bucket.Put(key, data)
+	})
 }

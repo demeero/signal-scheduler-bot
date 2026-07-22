@@ -1,4 +1,4 @@
-package outbox
+package domain
 
 import (
 	"testing"
