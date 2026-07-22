@@ -1,3 +1,12 @@
+## [1.2.0] - 2026-07-22
+
+### 🚀 Features
+
+- Add /history command to retrieve message delivery history with optional limit
+
+### 🚜 Refactor
+
+- *(outbox)* Split commands, queries, and persistence
 ## [1.1.0] - 2026-07-20
 
 ### 🚀 Features
